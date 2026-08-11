@@ -18,6 +18,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "clock-source.hpp"
 
+#include "font-dialog.hpp"
 #include "text-renderer.hpp"
 
 #include <obs-module.h>
@@ -48,6 +49,12 @@ constexpr double colon_offset_max_percent = 10.0 / default_time_ink_height * 100
 /* Tightening only; opening the tracking up is not useful here. */
 constexpr double tracking_min_em = -0.1;
 
+/* Ink height of the time row, which everything else is derived from. The lower
+ * bound is where the date row stops being legible; the upper is well past any
+ * sensible overlay, and scaling in the scene covers the rest. */
+constexpr double size_min = 12.0;
+constexpr double size_max = 300.0;
+
 /* Stand-in until the measured layout decides the real extents. */
 constexpr std::uint32_t placeholder_width = 320;
 constexpr std::uint32_t placeholder_height = 180;
@@ -67,7 +74,6 @@ struct clock_source {
 
 	std::string font_face;
 	std::string font_style;
-	std::uint32_t font_flags = 0;
 
 	double time_ink_height = default_time_ink_height;
 	double date_ink_height = default_time_ink_height * date_height_ratio;
@@ -123,12 +129,15 @@ void clock_source_update(void *data, obs_data_t *settings)
 {
 	auto *context = static_cast<clock_source *>(data);
 
-	obs_data_t *font = obs_data_get_obj(settings, "font");
-	context->font_face = obs_data_get_string(font, "face");
-	context->font_style = obs_data_get_string(font, "style");
-	context->font_flags = static_cast<std::uint32_t>(obs_data_get_int(font, "flags"));
-	context->time_ink_height = static_cast<double>(obs_data_get_int(font, "size"));
-	obs_data_release(font);
+	context->font_face = obs_data_get_string(settings, "font_face");
+	context->font_style = obs_data_get_string(settings, "font_style");
+	context->time_ink_height = obs_data_get_double(settings, "size");
+
+	/* Derived, and written back so the read-only field in the properties window
+	 * has something to show. */
+	const std::string shown = context->font_style.empty() ? context->font_face
+							      : context->font_face + " " + context->font_style;
+	obs_data_set_string(settings, "font_display", shown.c_str());
 
 	context->date_ink_height = context->time_ink_height * date_height_ratio;
 	context->color = static_cast<std::uint32_t>(obs_data_get_int(settings, "color"));
@@ -148,8 +157,8 @@ void clock_source_update(void *data, obs_data_t *settings)
 	 * is something users are routinely asked to paste into bug reports. Run OBS
 	 * with --verbose to see these. */
 	obs_log(LOG_DEBUG,
-		"settings: face='%s' style='%s' flags=%u ink=%.1f/%.1f color=%08x shadow=%d colon=%+.2f%% tracking=%.3fem",
-		context->font_face.c_str(), context->font_style.c_str(), context->font_flags, context->time_ink_height,
+		"settings: face='%s' style='%s' ink=%.1f/%.1f color=%08x shadow=%d colon=%+.2f%% tracking=%.3fem",
+		context->font_face.c_str(), context->font_style.c_str(), context->time_ink_height,
 		context->date_ink_height, context->color, context->shadow ? 1 : 0, context->colon_offset_percent,
 		context->tracking_em);
 }
@@ -177,25 +186,42 @@ void clock_source_destroy(void *data)
 
 void clock_source_get_defaults(obs_data_t *settings)
 {
-	obs_data_t *font = obs_data_create();
-	obs_data_set_default_string(font, "face", default_font_face);
-	obs_data_set_default_string(font, "style", "");
-	obs_data_set_default_int(font, "size", default_time_ink_height);
-	obs_data_set_default_int(font, "flags", 0);
-	obs_data_set_default_obj(settings, "font", font);
-	obs_data_release(font);
-
+	obs_data_set_default_string(settings, "font_face", default_font_face);
+	obs_data_set_default_string(settings, "font_style", "Bold");
+	obs_data_set_default_double(settings, "size", default_time_ink_height);
 	obs_data_set_default_int(settings, "color", 0xffffffff);
 	obs_data_set_default_bool(settings, "shadow", true);
 	obs_data_set_default_double(settings, "colon_offset", 0.0);
 	obs_data_set_default_double(settings, "tracking", 0.0);
 }
 
-obs_properties_t *clock_source_get_properties(void *)
+/// Opens the picker and writes the result back. Returning true has OBS rebuild
+/// the properties, which is what refreshes the name shown above the button.
+bool clock_source_choose_font(obs_properties_t *, obs_property_t *, void *data)
+{
+	auto *context = static_cast<clock_source *>(data);
+
+	std::string face = context->font_face;
+	std::string style = context->font_style;
+	if (!choose_font(face, style))
+		return false;
+
+	obs_data_t *settings = obs_source_get_settings(context->source);
+	obs_data_set_string(settings, "font_face", face.c_str());
+	obs_data_set_string(settings, "font_style", style.c_str());
+	obs_source_update(context->source, settings);
+	obs_data_release(settings);
+
+	return true;
+}
+
+obs_properties_t *clock_source_get_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
 
-	obs_properties_add_font(props, "font", obs_module_text("Font"));
+	obs_properties_add_text(props, "font_display", obs_module_text("Font"), OBS_TEXT_INFO);
+	obs_properties_add_button2(props, "choose_font", obs_module_text("ChooseFont"), clock_source_choose_font, data);
+	obs_properties_add_float_slider(props, "size", obs_module_text("Size"), size_min, size_max, 1.0);
 	obs_properties_add_color(props, "color", obs_module_text("Color"));
 	obs_properties_add_bool(props, "shadow", obs_module_text("Shadow"));
 	obs_properties_add_float_slider(props, "colon_offset", obs_module_text("ColonOffset"), colon_offset_min_percent,
