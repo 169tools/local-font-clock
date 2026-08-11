@@ -11,6 +11,10 @@ include(compilerconfig)
 include(defaults)
 include(helpers)
 
+# compiler_common sets C++17; obs_source_info is filled in with designated
+# initializers, which are C++20.
+set(CMAKE_CXX_STANDARD 20)
+
 add_library(${CMAKE_PROJECT_NAME} MODULE)
 
 find_package(libobs REQUIRED)
@@ -34,6 +38,6 @@ if(ENABLE_QT)
   )
 endif()
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
