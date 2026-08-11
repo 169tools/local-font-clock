@@ -31,10 +31,19 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 /// once; a back end supplies measurements and does the drawing.
 
 /// Extent of drawn ink, relative to the text origin (baseline at y = 0).
+///
+/// Both vertical figures are signed, and a back end must pass them through as
+/// it finds them. `ascent` is the ink's top edge measured upwards from the
+/// baseline; `descent` is its bottom edge measured downwards. Either can come
+/// out negative -- text sitting entirely above the baseline gives a negative
+/// descent -- and `solve_layout` depends on that, since a gap is measured from
+/// where the ink stops rather than from the baseline. Clamping to zero would
+/// silently change the gaps and the canvas height, and would do so on one
+/// platform and not the other.
 struct ink_extents {
 	double width = 0.0;
-	double ascent = 0.0;  ///< above the baseline, positive
-	double descent = 0.0; ///< below the baseline, positive
+	double ascent = 0.0;  ///< ink top, measured up from the baseline. May be negative.
+	double descent = 0.0; ///< ink bottom, measured down from the baseline. May be negative.
 	double left = 0.0;    ///< ink's left edge, relative to the origin
 
 	double height() const noexcept { return ascent + descent; }
