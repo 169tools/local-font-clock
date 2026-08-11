@@ -99,7 +99,10 @@ void clock_source_update(void *data, obs_data_t *settings)
 	context->colon_offset_percent = obs_data_get_double(settings, "colon_offset");
 	context->tracking_em = obs_data_get_double(settings, "tracking");
 
-	obs_log(LOG_INFO,
+	/* Debug level: a slider drag fires update() on every step, and the OBS log
+	 * is something users are routinely asked to paste into bug reports. Run OBS
+	 * with --verbose to see these. */
+	obs_log(LOG_DEBUG,
 		"settings: face='%s' style='%s' flags=%u ink=%.1f/%.1f color=%08x shadow=%d colon=%+.2f%% tracking=%.3fem",
 		context->font_face.c_str(), context->font_style.c_str(), context->font_flags,
 		context->time_ink_height, context->date_ink_height, context->color, context->shadow ? 1 : 0,
