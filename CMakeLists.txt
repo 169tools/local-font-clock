@@ -4,8 +4,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCO
 
 project(${_name} VERSION ${_version})
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
-option(ENABLE_QT "Use Qt functionality" OFF)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
+option(ENABLE_QT "Use Qt functionality" ON)
 
 include(compilerconfig)
 include(defaults)
@@ -27,6 +27,18 @@ endif()
 
 if(ENABLE_QT)
   find_package(Qt6 COMPONENTS Widgets Core)
+
+  # AGL has no binary in current macOS SDKs, but the framework directory is
+  # still on disk, so Qt's FindWrapOpenGL locates it and hands the linker a path
+  # it cannot resolve. Drop it; nothing here reaches OpenGL through Qt.
+  if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    get_target_property(_wrap_opengl_libraries WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
+    list(FILTER _wrap_opengl_libraries EXCLUDE REGEX "AGL\\.framework|-framework[ ]+AGL")
+    set_target_properties(
+      WrapOpenGL::WrapOpenGL
+      PROPERTIES INTERFACE_LINK_LIBRARIES "${_wrap_opengl_libraries}"
+    )
+  endif()
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
   target_compile_options(
     ${CMAKE_PROJECT_NAME}
@@ -40,7 +52,7 @@ endif()
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
-  PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp src/layout.hpp src/text-renderer.hpp
+  PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp src/font-dialog.cpp src/font-dialog.hpp src/layout.hpp src/text-renderer.hpp
 )
 
 if(APPLE)
