@@ -19,11 +19,12 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "text-renderer.hpp"
 
 #include "cf-ptr.hpp"
+#include "layout.hpp"
 
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 
-#include <cmath>
+#include <string>
 
 namespace {
 
@@ -32,26 +33,30 @@ namespace {
  * keeps the rounding error small. */
 constexpr double reference_point_size = 100.0;
 
-/* Antialiased edges reach a fraction of a pixel past the glyph outline. */
-constexpr int bitmap_margin = 2;
+/* Sizes are solved against these rather than against the text on screen, so
+ * that the digits stay put no matter what the clock currently reads. The date's
+ * reference leaves out the slash, which is taller than a digit in most faces
+ * and would otherwise shrink the numbers to compensate. */
+constexpr const char *time_reference_text = "0:00";
+constexpr const char *date_reference_text = "1230";
 
 CFPtr<CFStringRef> make_cfstring(const std::string &value)
 {
-	return CFPtr<CFStringRef>(
-		CFStringCreateWithBytes(nullptr, reinterpret_cast<const UInt8 *>(value.data()),
-					static_cast<CFIndex>(value.size()), kCFStringEncodingUTF8, false));
+	return CFPtr<CFStringRef>(CFStringCreateWithBytes(nullptr, reinterpret_cast<const UInt8 *>(value.data()),
+							  static_cast<CFIndex>(value.size()), kCFStringEncodingUTF8,
+							  false));
 }
 
 /// Resolves a family/style pair -- what the OBS font property gives us -- into
 /// a font at the requested point size.
-CFPtr<CTFontRef> make_font(const text_style &style, double point_size)
+CFPtr<CTFontRef> make_font(const clock_style &style, double point_size)
 {
 	CFPtr<CFStringRef> face = make_cfstring(style.face);
 	if (!face)
 		return {};
 
-	CFPtr<CFMutableDictionaryRef> attributes(CFDictionaryCreateMutable(
-		nullptr, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+	CFPtr<CFMutableDictionaryRef> attributes(CFDictionaryCreateMutable(nullptr, 2, &kCFTypeDictionaryKeyCallBacks,
+									   &kCFTypeDictionaryValueCallBacks));
 	if (!attributes)
 		return {};
 
@@ -85,8 +90,7 @@ CFPtr<CTLineRef> make_line(const std::string &text, CTFontRef font, CGColorRef c
 	if (!attributes)
 		return {};
 
-	CFPtr<CFAttributedStringRef> attributed(
-		CFAttributedStringCreate(nullptr, string.get(), attributes.get()));
+	CFPtr<CFAttributedStringRef> attributed(CFAttributedStringCreate(nullptr, string.get(), attributes.get()));
 	if (!attributed)
 		return {};
 
@@ -97,9 +101,16 @@ CFPtr<CTLineRef> make_line(const std::string &text, CTFontRef font, CGColorRef c
 /// typographic bounds: the em box and the line box both include space the glyph
 /// does not use, and how much varies per typeface, which is exactly what makes
 /// point sizes incomparable.
-CGRect ink_bounds(CTLineRef line)
+ink_extents measure(CTLineRef line)
 {
-	return CTLineGetBoundsWithOptions(line, kCTLineBoundsUseGlyphPathBounds);
+	const CGRect bounds = CTLineGetBoundsWithOptions(line, kCTLineBoundsUseGlyphPathBounds);
+
+	ink_extents extents;
+	extents.width = bounds.size.width;
+	extents.left = bounds.origin.x;
+	extents.ascent = bounds.origin.y + bounds.size.height;
+	extents.descent = -bounds.origin.y;
+	return extents;
 }
 
 CFPtr<CGColorRef> make_color(std::uint32_t rgba)
@@ -119,7 +130,7 @@ CFPtr<CGColorRef> make_color(std::uint32_t rgba)
 }
 
 /// Finds the point size whose ink is `target_height` tall.
-double solve_point_size(const std::string &text, const text_style &style, CGColorRef color, double target_height)
+double solve_point_size(const std::string &text, const clock_style &style, CGColorRef color, double target_height)
 {
 	CFPtr<CTFontRef> probe = make_font(style, reference_point_size);
 	if (!probe)
@@ -129,7 +140,7 @@ double solve_point_size(const std::string &text, const text_style &style, CGColo
 	if (!line)
 		return 0.0;
 
-	const double reference_height = ink_bounds(line.get()).size.height;
+	const double reference_height = measure(line.get()).height();
 	if (reference_height <= 0.0)
 		return 0.0;
 
@@ -145,43 +156,100 @@ double solve_point_size(const std::string &text, const text_style &style, CGColo
 	if (!corrected_line)
 		return estimate;
 
-	const double actual_height = ink_bounds(corrected_line.get()).size.height;
+	const double actual_height = measure(corrected_line.get()).height();
 	if (actual_height <= 0.0)
 		return estimate;
 
 	return estimate * target_height / actual_height;
 }
 
+/// Width the rule is pinned to: the widest digit, repeated across the time
+/// format. Measured per digit rather than assuming zero is widest, because it
+/// is not in every face -- and if it is not, 12:34 would overhang a rule sized
+/// from 00:00.
+double rule_reference_width(CTFontRef font, CGColorRef color)
+{
+	std::string widest = "0";
+	double widest_width = 0.0;
+
+	for (char digit = '0'; digit <= '9'; ++digit) {
+		const std::string candidate(1, digit);
+		CFPtr<CTLineRef> line = make_line(candidate, font, color);
+		if (!line)
+			continue;
+
+		const double width = measure(line.get()).width;
+		if (width > widest_width) {
+			widest_width = width;
+			widest = candidate;
+		}
+	}
+
+	const std::string reference = widest + widest + ":" + widest + widest;
+	CFPtr<CTLineRef> line = make_line(reference, font, color);
+	return line ? measure(line.get()).width : 0.0;
+}
+
+void draw_line_at(CGContextRef context, CTLineRef line, double origin_x, double baseline_y, double canvas_height)
+{
+	/* Layout works top-down; Core Graphics draws bottom-up. */
+	CGContextSetTextPosition(context, origin_x, canvas_height - baseline_y);
+	CTLineDraw(line, context);
+}
+
 } // namespace
 
-rendered_text render_text(const std::string &text, const text_style &style)
+rendered_text render_clock(const clock_content &content, const clock_style &style)
 {
-	if (text.empty() || style.ink_height <= 0.0)
+	if (content.time.empty() || style.time_ink_height <= 0.0 || style.date_ink_height <= 0.0)
 		return {};
 
 	CFPtr<CGColorRef> color = make_color(style.color);
 	if (!color)
 		return {};
 
-	const double point_size = solve_point_size(text, style, color.get(), style.ink_height);
-	if (point_size <= 0.0)
+	const double time_size = solve_point_size(time_reference_text, style, color.get(), style.time_ink_height);
+	const double date_size = solve_point_size(date_reference_text, style, color.get(), style.date_ink_height);
+	if (time_size <= 0.0 || date_size <= 0.0)
 		return {};
 
-	CFPtr<CTFontRef> font = make_font(style, point_size);
-	if (!font)
+	CFPtr<CTFontRef> time_font = make_font(style, time_size);
+	CFPtr<CTFontRef> date_font = make_font(style, date_size);
+	if (!time_font || !date_font)
 		return {};
 
-	CFPtr<CTLineRef> line = make_line(text, font.get(), color.get());
-	if (!line)
+	CFPtr<CTLineRef> time_line = make_line(content.time, time_font.get(), color.get());
+	CFPtr<CTLineRef> date_line = make_line(content.date, date_font.get(), color.get());
+	if (!time_line || !date_line)
 		return {};
 
-	const CGRect bounds = ink_bounds(line.get());
-	if (bounds.size.width <= 0.0 || bounds.size.height <= 0.0)
+	/* Vertical placement uses the reference strings too, not what is on screen.
+	 * The date's slash rides a little above the digits' top, which is the
+	 * intended trade: the numbers are what the eye tracks, so they are what
+	 * stays put. */
+	CFPtr<CTLineRef> time_reference = make_line(time_reference_text, time_font.get(), color.get());
+	CFPtr<CTLineRef> date_reference = make_line(date_reference_text, date_font.get(), color.get());
+	if (!time_reference || !date_reference)
+		return {};
+
+	clock_measurements measurements;
+	measurements.time = measure(time_line.get());
+	measurements.date = measure(date_line.get());
+	measurements.time.ascent = measure(time_reference.get()).ascent;
+	measurements.time.descent = measure(time_reference.get()).descent;
+	measurements.date.ascent = measure(date_reference.get()).ascent;
+	measurements.date.descent = measure(date_reference.get()).descent;
+	measurements.rule_reference_width = rule_reference_width(time_font.get(), color.get());
+	if (measurements.rule_reference_width <= 0.0)
+		return {};
+
+	const clock_layout layout = solve_layout(measurements);
+	if (layout.width == 0 || layout.height == 0)
 		return {};
 
 	rendered_text result;
-	result.width = static_cast<std::uint32_t>(std::ceil(bounds.size.width)) + bitmap_margin * 2;
-	result.height = static_cast<std::uint32_t>(std::ceil(bounds.size.height)) + bitmap_margin * 2;
+	result.width = layout.width;
+	result.height = layout.height;
 	result.pixels.assign(static_cast<std::size_t>(result.width) * result.height * 4, 0);
 
 	CFPtr<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
@@ -190,29 +258,31 @@ rendered_text render_text(const std::string &text, const text_style &style)
 
 	/* PremultipliedLast with 32Big byte order lays the channels out as R, G, B,
 	 * A in memory, which is what GS_RGBA expects, and the premultiplication
-	 * matches OBS_EFFECT_PREMULTIPLIED_ALPHA. */
-	/* C++20 deprecated bitwise ops between distinct enum types, and these two
+	 * matches OBS_EFFECT_PREMULTIPLIED_ALPHA.
+	 *
+	 * C++20 deprecated bitwise ops between distinct enum types, and these two
 	 * constants come from different ones, so the combination is spelled out. */
-	const CGBitmapInfo bitmap_info = static_cast<CGBitmapInfo>(
-		static_cast<std::uint32_t>(kCGImageAlphaPremultipliedLast) |
-		static_cast<std::uint32_t>(kCGBitmapByteOrder32Big));
+	const CGBitmapInfo bitmap_info =
+		static_cast<CGBitmapInfo>(static_cast<std::uint32_t>(kCGImageAlphaPremultipliedLast) |
+					  static_cast<std::uint32_t>(kCGBitmapByteOrder32Big));
 
-	CFPtr<CGContextRef> context(CGBitmapContextCreate(
-		result.pixels.data(), result.width, result.height, 8, static_cast<std::size_t>(result.width) * 4,
-		space.get(), bitmap_info));
+	CFPtr<CGContextRef> context(CGBitmapContextCreate(result.pixels.data(), result.width, result.height, 8,
+							  static_cast<std::size_t>(result.width) * 4, space.get(),
+							  bitmap_info));
 	if (!context)
 		return {};
 
 	CGContextSetShouldAntialias(context.get(), true);
 	CGContextSetShouldSmoothFonts(context.get(), false);
 
-	/* Core Graphics puts the drawing origin at the bottom left, so the baseline
-	 * sits `bitmap_margin` above the bottom edge plus however far the ink
-	 * descends. Rows are still stored top to bottom, so the bitmap comes out the
-	 * right way up and needs no flip on upload. */
-	CGContextSetTextPosition(context.get(), bitmap_margin - bounds.origin.x,
-				 bitmap_margin - bounds.origin.y);
-	CTLineDraw(line.get(), context.get());
+	draw_line_at(context.get(), time_line.get(), layout.time_origin_x, layout.time_baseline_y, layout.height);
+	draw_line_at(context.get(), date_line.get(), layout.date_origin_x, layout.date_baseline_y, layout.height);
+
+	/* The rule takes the text colour, so it disappears against a background for
+	 * the same reasons the text does, and stays legible for the same fixes. */
+	CGContextSetFillColorWithColor(context.get(), color.get());
+	CGContextFillRect(context.get(), CGRectMake(layout.rule_x, layout.height - layout.rule_y - layout.rule_height,
+						    layout.rule_width, layout.rule_height));
 
 	return result;
 }

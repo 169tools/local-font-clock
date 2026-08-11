@@ -89,13 +89,19 @@ void rebuild_texture(clock_source *context)
 		context->texture = nullptr;
 	}
 
-	text_style style;
+	clock_style style;
 	style.face = context->font_face;
 	style.style = context->font_style;
-	style.ink_height = context->time_ink_height;
+	style.time_ink_height = context->time_ink_height;
+	style.date_ink_height = context->date_ink_height;
 	style.color = context->color;
 
-	const rendered_text bitmap = render_text("12:34", style);
+	/* Fixed strings until the clock starts telling the time. */
+	clock_content content;
+	content.time = "12:34";
+	content.date = "7/29 WED";
+
+	const rendered_text bitmap = render_clock(content, style);
 	if (!bitmap.valid()) {
 		context->width = placeholder_width;
 		context->height = placeholder_height;
@@ -143,9 +149,9 @@ void clock_source_update(void *data, obs_data_t *settings)
 	 * with --verbose to see these. */
 	obs_log(LOG_DEBUG,
 		"settings: face='%s' style='%s' flags=%u ink=%.1f/%.1f color=%08x shadow=%d colon=%+.2f%% tracking=%.3fem",
-		context->font_face.c_str(), context->font_style.c_str(), context->font_flags,
-		context->time_ink_height, context->date_ink_height, context->color, context->shadow ? 1 : 0,
-		context->colon_offset_percent, context->tracking_em);
+		context->font_face.c_str(), context->font_style.c_str(), context->font_flags, context->time_ink_height,
+		context->date_ink_height, context->color, context->shadow ? 1 : 0, context->colon_offset_percent,
+		context->tracking_em);
 }
 
 void *clock_source_create(obs_data_t *settings, obs_source_t *source)
@@ -192,8 +198,8 @@ obs_properties_t *clock_source_get_properties(void *)
 	obs_properties_add_font(props, "font", obs_module_text("Font"));
 	obs_properties_add_color(props, "color", obs_module_text("Color"));
 	obs_properties_add_bool(props, "shadow", obs_module_text("Shadow"));
-	obs_properties_add_float_slider(props, "colon_offset", obs_module_text("ColonOffset"),
-					colon_offset_min_percent, colon_offset_max_percent, 0.1);
+	obs_properties_add_float_slider(props, "colon_offset", obs_module_text("ColonOffset"), colon_offset_min_percent,
+					colon_offset_max_percent, 0.1);
 	obs_properties_add_float_slider(props, "tracking", obs_module_text("Tracking"), tracking_min_em, 0.0, 0.005);
 
 	return props;
