@@ -19,6 +19,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,7 @@ struct clock_style {
 	double date_ink_height = 18.0;
 
 	/// OBS byte order: red in the low byte, as vec4_from_rgba expects. The rule
-	/// takes the same colour as the text, since it reads as part of the mark.
+	/// takes the same color as the text, since it reads as part of the mark.
 	std::uint32_t color = 0xffffffff;
 };
 
@@ -58,6 +59,37 @@ struct rendered_text {
 	bool valid() const noexcept { return width > 0 && height > 0 && !pixels.empty(); }
 };
 
-/// Typesets the whole clock -- time, rule and date -- into one bitmap. Returns
-/// an empty result if the platform could not produce one.
-rendered_text render_clock(const clock_content &content, const clock_style &style);
+/// A clock whose typeface is resolved and whose geometry is solved: everything
+/// that follows from the style and not from the time.
+///
+/// Resolving the face, solving the point size against the digit envelope and
+/// measuring the widest digit are all comparatively expensive, and none of them
+/// change from one minute to the next. Holding on to this means a minute
+/// rolling over costs two strings' worth of typesetting and nothing else.
+///
+/// The back end supplies the subclass; callers only ever see this interface,
+/// which is what keeps the platform types out of the rest of the plugin.
+class prepared_clock {
+public:
+	virtual ~prepared_clock() = default;
+
+	prepared_clock(const prepared_clock &) = delete;
+	prepared_clock &operator=(const prepared_clock &) = delete;
+
+	/// Canvas size, fixed for the life of the object. It follows the widest
+	/// digit rather than the time on screen, so the source does not resize
+	/// itself as the minutes go by -- and the texture can be reused.
+	virtual std::uint32_t width() const noexcept = 0;
+	virtual std::uint32_t height() const noexcept = 0;
+
+	/// Typesets the whole clock -- time, rule and date -- into one bitmap.
+	/// Returns an empty result if the strings could not be laid out.
+	virtual rendered_text render(const clock_content &content) const = 0;
+
+protected:
+	prepared_clock() = default;
+};
+
+/// Returns null if the platform could not prepare the clock: no back end for
+/// this OS, or a style whose face would not resolve.
+std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style);

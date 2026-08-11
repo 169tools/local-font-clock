@@ -20,8 +20,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 /* Placeholder for platforms whose back end is not written yet. Windows gets a
  * DirectWrite implementation; keeping the symbol defined means the rest of the
- * plugin still compiles and links there in the meantime. */
-rendered_text render_clock(const clock_content &, const clock_style &)
+ * plugin still compiles and links there in the meantime. Returning null is the
+ * documented way to say the platform cannot prepare a clock, so callers already
+ * handle it. */
+std::unique_ptr<prepared_clock> prepare_clock(const clock_style &)
 {
-	return {};
+	return nullptr;
 }

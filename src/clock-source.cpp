@@ -25,6 +25,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <plugin-support.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace {
@@ -84,17 +85,57 @@ struct clock_source {
 	double colon_offset_percent = 0.0;
 	double tracking_em = 0.0;
 
+	/* Holds the resolved typeface and the solved geometry, so that redrawing
+	 * costs only the typesetting of two strings. Null when the platform has no
+	 * back end or the style would not resolve. */
+	std::unique_ptr<prepared_clock> clock;
+
 	gs_texture_t *texture = nullptr;
 };
 
-/* Rasterises the clock and uploads it. Must hold the graphics context. */
-void rebuild_texture(clock_source *context)
+/* Rasterises the current reading and uploads it. Must hold the graphics
+ * context. */
+void redraw_texture(clock_source *context)
 {
-	if (context->texture) {
-		gs_texture_destroy(context->texture);
-		context->texture = nullptr;
+	/* Fixed strings until the clock starts telling the time. */
+	clock_content content;
+	content.time = "12:34";
+	content.date = "7/29 WED";
+
+	const rendered_text bitmap = context->clock ? context->clock->render(content) : rendered_text{};
+	if (!bitmap.valid()) {
+		if (context->texture) {
+			gs_texture_destroy(context->texture);
+			context->texture = nullptr;
+		}
+		context->width = placeholder_width;
+		context->height = placeholder_height;
+		return;
 	}
 
+	const std::uint8_t *rows = bitmap.pixels.data();
+
+	/* The canvas is sized from the widest digit rather than from the time on
+	 * screen, so a minute rolling over lands in a texture of the same size and
+	 * only the contents need replacing. GS_DYNAMIC is what makes the texture
+	 * writable after creation; this is how OBS's own text source does it. */
+	if (context->texture && context->width == bitmap.width && context->height == bitmap.height) {
+		gs_texture_set_image(context->texture, rows, bitmap.width * 4, false);
+		return;
+	}
+
+	if (context->texture)
+		gs_texture_destroy(context->texture);
+
+	context->texture = gs_texture_create(bitmap.width, bitmap.height, GS_RGBA, 1, &rows, GS_DYNAMIC);
+	context->width = bitmap.width;
+	context->height = bitmap.height;
+}
+
+/* Re-resolves the typeface and geometry, then redraws. Only needed when the
+ * style changes -- the time changing does not. Must hold the graphics context. */
+void rebuild_clock(clock_source *context)
+{
 	clock_style style;
 	style.face = context->font_face;
 	style.style = context->font_style;
@@ -102,22 +143,8 @@ void rebuild_texture(clock_source *context)
 	style.date_ink_height = context->date_ink_height;
 	style.color = context->color;
 
-	/* Fixed strings until the clock starts telling the time. */
-	clock_content content;
-	content.time = "12:34";
-	content.date = "7/29 WED";
-
-	const rendered_text bitmap = render_clock(content, style);
-	if (!bitmap.valid()) {
-		context->width = placeholder_width;
-		context->height = placeholder_height;
-		return;
-	}
-
-	const std::uint8_t *rows = bitmap.pixels.data();
-	context->texture = gs_texture_create(bitmap.width, bitmap.height, GS_RGBA, 1, &rows, 0);
-	context->width = bitmap.width;
-	context->height = bitmap.height;
+	context->clock = prepare_clock(style);
+	redraw_texture(context);
 }
 
 const char *clock_source_get_name(void *)
@@ -150,7 +177,7 @@ void clock_source_update(void *data, obs_data_t *settings)
 	 * a chance to draw. update() runs off the graphics thread, hence the
 	 * explicit context. */
 	obs_enter_graphics();
-	rebuild_texture(context);
+	rebuild_clock(context);
 	obs_leave_graphics();
 
 	/* Debug level: a slider drag fires update() on every step, and the OBS log

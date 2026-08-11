@@ -25,7 +25,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <CoreText/CoreText.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -33,13 +35,6 @@ namespace {
  * that a single correcting pass settles it. Measuring from a large reference
  * keeps the rounding error small. */
 constexpr double reference_point_size = 100.0;
-
-/* Sizes are solved against these rather than against the text on screen, so
- * that the digits stay put no matter what the clock currently reads. The date's
- * reference leaves out the slash, which is taller than a digit in most faces
- * and would otherwise shrink the numbers to compensate. */
-constexpr const char *time_reference_text = "0:00";
-constexpr const char *date_reference_text = "1230";
 
 CFPtr<CFStringRef> make_cfstring(const std::string &value)
 {
@@ -130,18 +125,57 @@ CFPtr<CGColorRef> make_color(std::uint32_t rgba)
 	return CFPtr<CGColorRef>(CGColorCreate(space.get(), components));
 }
 
-/// Finds the point size whose ink is `target_height` tall.
-double solve_point_size(const std::string &text, const clock_style &style, CGColorRef color, double target_height)
+/// Vertical envelope of every digit, at the size `font` was built for.
+///
+/// Sizing and placement both work from this rather than from a reference string
+/// such as `0:00`. Any reference string assumes the digits it happens to hold
+/// are the tallest in the face -- true of text faces, not of display or
+/// handwritten ones. Where the assumption fails, the requested ink height lands
+/// on a digit that is not the tallest, so the clock draws larger than it was
+/// asked for and the surplus eats into the top margin. The envelope encloses
+/// every reading, so the size the user sets is the height of the tallest digit,
+/// the margins hold, and nothing shifts as the time changes.
+///
+/// Digits only: the date's slash and its weekday capitals rise past them in
+/// most faces, and including those would shrink the numbers to compensate.
+ink_span digit_envelope(CTFontRef font, CGColorRef color)
 {
-	CFPtr<CTFontRef> probe = make_font(style, reference_point_size);
-	if (!probe)
+	ink_span envelope;
+	bool seen = false;
+
+	for (char digit = '0'; digit <= '9'; ++digit) {
+		CFPtr<CTLineRef> line = make_line(std::string(1, digit), font, color);
+		if (!line)
+			continue;
+
+		const ink_extents extents = measure(line.get());
+		if (!seen) {
+			envelope.ascent = extents.ascent;
+			envelope.descent = extents.descent;
+			seen = true;
+			continue;
+		}
+
+		envelope.ascent = std::max(envelope.ascent, extents.ascent);
+		envelope.descent = std::max(envelope.descent, extents.descent);
+	}
+
+	return envelope;
+}
+
+double envelope_height(const clock_style &style, CGColorRef color, double point_size)
+{
+	CFPtr<CTFontRef> font = make_font(style, point_size);
+	if (!font)
 		return 0.0;
 
-	CFPtr<CTLineRef> line = make_line(text, probe.get(), color);
-	if (!line)
-		return 0.0;
+	return digit_envelope(font.get(), color).height();
+}
 
-	const double reference_height = measure(line.get()).height();
+/// Finds the point size whose digit envelope is `target_height` tall.
+double solve_point_size(const clock_style &style, CGColorRef color, double target_height)
+{
+	const double reference_height = envelope_height(style, color, reference_point_size);
 	if (reference_height <= 0.0)
 		return 0.0;
 
@@ -149,15 +183,7 @@ double solve_point_size(const std::string &text, const clock_style &style, CGCol
 
 	/* Hinting makes the relationship slightly non-linear, so measure once more
 	 * at the estimate and correct by the same ratio. */
-	CFPtr<CTFontRef> corrected = make_font(style, estimate);
-	if (!corrected)
-		return estimate;
-
-	CFPtr<CTLineRef> corrected_line = make_line(text, corrected.get(), color);
-	if (!corrected_line)
-		return estimate;
-
-	const double actual_height = measure(corrected_line.get()).height();
+	const double actual_height = envelope_height(style, color, estimate);
 	if (actual_height <= 0.0)
 		return estimate;
 
@@ -191,102 +217,54 @@ double rule_reference_width(CTFontRef font, CGColorRef color)
 	return line ? measure(line.get()).width : 0.0;
 }
 
-/// Vertical envelope of every digit. Rows are placed against this rather than
-/// against the string on screen, so the layout does not shift as the time
-/// changes, and rather than against a single reference digit, so a face whose
-/// zero is short does not let taller digits push past the margin.
-ink_extents digit_envelope(CTFontRef font, CGColorRef color)
+/// Draws a line centered on the rule. The measurement is taken here rather than
+/// carried in the frame because it is the one figure that changes with the
+/// time: the string's own ink width and left bearing.
+void draw_centered(CGContextRef context, CTLineRef line, const clock_frame &frame, double baseline_y)
 {
-	ink_extents envelope;
-	bool seen = false;
+	const double origin_x = center_origin_x(frame, measure(line));
 
-	for (char digit = '0'; digit <= '9'; ++digit) {
-		CFPtr<CTLineRef> line = make_line(std::string(1, digit), font, color);
-		if (!line)
-			continue;
-
-		const ink_extents extents = measure(line.get());
-		if (!seen) {
-			envelope.ascent = extents.ascent;
-			envelope.descent = extents.descent;
-			seen = true;
-			continue;
-		}
-
-		envelope.ascent = std::max(envelope.ascent, extents.ascent);
-		envelope.descent = std::max(envelope.descent, extents.descent);
-	}
-
-	return envelope;
-}
-
-void draw_line_at(CGContextRef context, CTLineRef line, double origin_x, double baseline_y, double canvas_height)
-{
 	/* Layout works top-down; Core Graphics draws bottom-up. */
-	CGContextSetTextPosition(context, origin_x, canvas_height - baseline_y);
+	CGContextSetTextPosition(context, origin_x, frame.height - baseline_y);
 	CTLineDraw(line, context);
 }
 
-} // namespace
+class mac_clock final : public prepared_clock {
+public:
+	mac_clock(CFPtr<CTFontRef> time_font, CFPtr<CTFontRef> date_font, CFPtr<CGColorRef> color,
+		  const clock_frame &frame)
+		: time_font_(std::move(time_font)),
+		  date_font_(std::move(date_font)),
+		  color_(std::move(color)),
+		  frame_(frame)
+	{
+	}
 
-rendered_text render_clock(const clock_content &content, const clock_style &style)
+	std::uint32_t width() const noexcept override { return frame_.width; }
+	std::uint32_t height() const noexcept override { return frame_.height; }
+
+	rendered_text render(const clock_content &content) const override;
+
+private:
+	CFPtr<CTFontRef> time_font_;
+	CFPtr<CTFontRef> date_font_;
+	CFPtr<CGColorRef> color_;
+	clock_frame frame_;
+};
+
+rendered_text mac_clock::render(const clock_content &content) const
 {
-	if (content.time.empty() || style.time_ink_height <= 0.0 || style.date_ink_height <= 0.0)
+	if (content.time.empty())
 		return {};
 
-	CFPtr<CGColorRef> color = make_color(style.color);
-	if (!color)
-		return {};
-
-	const double time_size = solve_point_size(time_reference_text, style, color.get(), style.time_ink_height);
-	const double date_size = solve_point_size(date_reference_text, style, color.get(), style.date_ink_height);
-	if (time_size <= 0.0 || date_size <= 0.0)
-		return {};
-
-	CFPtr<CTFontRef> time_font = make_font(style, time_size);
-	CFPtr<CTFontRef> date_font = make_font(style, date_size);
-	if (!time_font || !date_font)
-		return {};
-
-	CFPtr<CTLineRef> time_line = make_line(content.time, time_font.get(), color.get());
-	CFPtr<CTLineRef> date_line = make_line(content.date, date_font.get(), color.get());
+	CFPtr<CTLineRef> time_line = make_line(content.time, time_font_.get(), color_.get());
+	CFPtr<CTLineRef> date_line = make_line(content.date, date_font_.get(), color_.get());
 	if (!time_line || !date_line)
 		return {};
 
-	/* The size is solved against 0:00, so that is what the spacing ratios scale
-	 * off. Placement is a separate question and uses the digit envelope. */
-	CFPtr<CTLineRef> time_reference = make_line(time_reference_text, time_font.get(), color.get());
-	if (!time_reference)
-		return {};
-
-	const double scale_height = measure(time_reference.get()).height();
-
-	clock_measurements measurements;
-
-	/* Widths come from the strings being drawn -- those are what gets centred --
-	 * while the vertical figures come from the envelope. The date's slash and
-	 * capitals still ride past the digits' top, which is the intended trade: the
-	 * numbers are the visual subject, so they are what stays put. */
-	measurements.time = measure(time_line.get());
-	measurements.date = measure(date_line.get());
-
-	const ink_extents time_envelope = digit_envelope(time_font.get(), color.get());
-	const ink_extents date_envelope = digit_envelope(date_font.get(), color.get());
-	measurements.time.ascent = time_envelope.ascent;
-	measurements.time.descent = time_envelope.descent;
-	measurements.date.ascent = date_envelope.ascent;
-	measurements.date.descent = date_envelope.descent;
-	measurements.rule_reference_width = rule_reference_width(time_font.get(), color.get());
-	if (measurements.rule_reference_width <= 0.0)
-		return {};
-
-	const clock_layout layout = solve_layout(measurements, scale_height);
-	if (layout.width == 0 || layout.height == 0)
-		return {};
-
 	rendered_text result;
-	result.width = layout.width;
-	result.height = layout.height;
+	result.width = frame_.width;
+	result.height = frame_.height;
 	result.pixels.assign(static_cast<std::size_t>(result.width) * result.height * 4, 0);
 
 	CFPtr<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
@@ -312,14 +290,52 @@ rendered_text render_clock(const clock_content &content, const clock_style &styl
 	CGContextSetShouldAntialias(context.get(), true);
 	CGContextSetShouldSmoothFonts(context.get(), false);
 
-	draw_line_at(context.get(), time_line.get(), layout.time_origin_x, layout.time_baseline_y, layout.height);
-	draw_line_at(context.get(), date_line.get(), layout.date_origin_x, layout.date_baseline_y, layout.height);
+	/* The date's slash and capitals ride past the digits' top, which is the
+	 * intended trade: the numbers are the visual subject, so they are what the
+	 * margins are measured against. */
+	draw_centered(context.get(), time_line.get(), frame_, frame_.time_baseline_y);
+	draw_centered(context.get(), date_line.get(), frame_, frame_.date_baseline_y);
 
-	/* The rule takes the text colour, so it disappears against a background for
+	/* The rule takes the text color, so it disappears against a background for
 	 * the same reasons the text does, and stays legible for the same fixes. */
-	CGContextSetFillColorWithColor(context.get(), color.get());
-	CGContextFillRect(context.get(), CGRectMake(layout.rule_x, layout.height - layout.rule_y - layout.rule_height,
-						    layout.rule_width, layout.rule_height));
+	CGContextSetFillColorWithColor(context.get(), color_.get());
+	CGContextFillRect(context.get(), CGRectMake(frame_.rule_x, frame_.height - frame_.rule_y - frame_.rule_height,
+						    frame_.rule_width, frame_.rule_height));
 
 	return result;
+}
+
+} // namespace
+
+std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style)
+{
+	if (style.time_ink_height <= 0.0 || style.date_ink_height <= 0.0)
+		return nullptr;
+
+	CFPtr<CGColorRef> color = make_color(style.color);
+	if (!color)
+		return nullptr;
+
+	const double time_size = solve_point_size(style, color.get(), style.time_ink_height);
+	const double date_size = solve_point_size(style, color.get(), style.date_ink_height);
+	if (time_size <= 0.0 || date_size <= 0.0)
+		return nullptr;
+
+	CFPtr<CTFontRef> time_font = make_font(style, time_size);
+	CFPtr<CTFontRef> date_font = make_font(style, date_size);
+	if (!time_font || !date_font)
+		return nullptr;
+
+	clock_measurements measurements;
+	measurements.time = digit_envelope(time_font.get(), color.get());
+	measurements.date = digit_envelope(date_font.get(), color.get());
+	measurements.rule_reference_width = rule_reference_width(time_font.get(), color.get());
+	if (measurements.rule_reference_width <= 0.0)
+		return nullptr;
+
+	const clock_frame frame = solve_frame(measurements);
+	if (frame.width == 0 || frame.height == 0)
+		return nullptr;
+
+	return std::make_unique<mac_clock>(std::move(time_font), std::move(date_font), std::move(color), frame);
 }
