@@ -33,6 +33,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QPixmap>
 #include <QVBoxLayout>
 
+#include <memory>
+
 namespace {
 
 /* Bold reads better at a glance than regular, which is what a clock is for, so
@@ -55,7 +57,13 @@ QPixmap render_preview(const QString &family, const QString &style)
 	spec.date_ink_height = preview_ink_height * 18.0 / 44.0;
 	spec.color = 0xffffffff;
 
-	const rendered_text bitmap = render_clock({"12:34", "5/6 WED"}, spec);
+	/* Prepared and discarded per thumbnail: the point of the preview is that the
+	 * face keeps changing, so there is nothing to hold on to between them. */
+	const std::unique_ptr<prepared_clock> clock = prepare_clock(spec);
+	if (!clock)
+		return {};
+
+	const rendered_text bitmap = clock->render({"12:34", "5/6 WED"});
 	if (!bitmap.valid())
 		return {};
 
