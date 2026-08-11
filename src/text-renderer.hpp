@@ -23,16 +23,28 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <vector>
 
 /// What to draw, in terms the platform back end can act on.
-struct text_style {
+struct clock_style {
 	std::string face;
 	std::string style;
 
-	/// Target height of the drawn ink, in pixels. The point size is solved for
-	/// rather than given, so that swapping typefaces keeps the visual size.
-	double ink_height = 44.0;
+	/// Target height of the time row's ink, in pixels. The point size is solved
+	/// for rather than given, so that swapping typefaces keeps the visual size.
+	double time_ink_height = 44.0;
 
-	/// OBS byte order: red in the low byte, as vec4_from_rgba expects.
+	/// The date row rides on the time row's height rather than being set
+	/// independently, so the proportion between the rows survives a size change.
+	double date_ink_height = 18.0;
+
+	/// OBS byte order: red in the low byte, as vec4_from_rgba expects. The rule
+	/// takes the same colour as the text, since it reads as part of the mark.
 	std::uint32_t color = 0xffffffff;
+};
+
+/// The strings to typeset. Kept apart from the style so the caller can rebuild
+/// them every minute without touching anything else.
+struct clock_content {
+	std::string time;
+	std::string date;
 };
 
 /// A CPU-side bitmap ready to be handed to the graphics subsystem.
@@ -46,6 +58,6 @@ struct rendered_text {
 	bool valid() const noexcept { return width > 0 && height > 0 && !pixels.empty(); }
 };
 
-/// Rasterises `text` in the requested style. Returns an empty result if the
-/// text is blank or the platform could not produce a bitmap.
-rendered_text render_text(const std::string &text, const text_style &style);
+/// Typesets the whole clock -- time, rule and date -- into one bitmap. Returns
+/// an empty result if the platform could not produce one.
+rendered_text render_clock(const clock_content &content, const clock_style &style);

@@ -40,7 +40,7 @@ endif()
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
-  PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp src/text-renderer.hpp
+  PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp src/layout.hpp src/text-renderer.hpp
 )
 
 if(APPLE)
