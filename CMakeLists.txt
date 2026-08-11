@@ -38,6 +38,19 @@ if(ENABLE_QT)
   )
 endif()
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp)
+target_sources(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE src/plugin-main.cpp src/clock-source.cpp src/clock-source.hpp src/text-renderer.hpp
+)
+
+if(APPLE)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/cf-ptr.hpp src/text-renderer-mac.cpp)
+  target_link_libraries(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE "-framework CoreFoundation" "-framework CoreGraphics" "-framework CoreText"
+  )
+else()
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/text-renderer-stub.cpp)
+endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

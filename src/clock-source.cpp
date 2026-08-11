@@ -18,6 +18,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "clock-source.hpp"
 
+#include "text-renderer.hpp"
+
 #include <obs-module.h>
 #include <plugin-support.h>
 
@@ -75,7 +77,36 @@ struct clock_source {
 	bool shadow = true;
 	double colon_offset_percent = 0.0;
 	double tracking_em = 0.0;
+
+	gs_texture_t *texture = nullptr;
 };
+
+/* Rasterises the clock and uploads it. Must hold the graphics context. */
+void rebuild_texture(clock_source *context)
+{
+	if (context->texture) {
+		gs_texture_destroy(context->texture);
+		context->texture = nullptr;
+	}
+
+	text_style style;
+	style.face = context->font_face;
+	style.style = context->font_style;
+	style.ink_height = context->time_ink_height;
+	style.color = context->color;
+
+	const rendered_text bitmap = render_text("12:34", style);
+	if (!bitmap.valid()) {
+		context->width = placeholder_width;
+		context->height = placeholder_height;
+		return;
+	}
+
+	const std::uint8_t *rows = bitmap.pixels.data();
+	context->texture = gs_texture_create(bitmap.width, bitmap.height, GS_RGBA, 1, &rows, 0);
+	context->width = bitmap.width;
+	context->height = bitmap.height;
+}
 
 const char *clock_source_get_name(void *)
 {
@@ -99,6 +130,14 @@ void clock_source_update(void *data, obs_data_t *settings)
 	context->colon_offset_percent = obs_data_get_double(settings, "colon_offset");
 	context->tracking_em = obs_data_get_double(settings, "tracking");
 
+	/* Rebuilt here rather than in video_render so the source reports a real
+	 * size straight away; a zero-sized source can be culled before it ever gets
+	 * a chance to draw. update() runs off the graphics thread, hence the
+	 * explicit context. */
+	obs_enter_graphics();
+	rebuild_texture(context);
+	obs_leave_graphics();
+
 	/* Debug level: a slider drag fires update() on every step, and the OBS log
 	 * is something users are routinely asked to paste into bug reports. Run OBS
 	 * with --verbose to see these. */
@@ -119,7 +158,15 @@ void *clock_source_create(obs_data_t *settings, obs_source_t *source)
 
 void clock_source_destroy(void *data)
 {
-	delete static_cast<clock_source *>(data);
+	auto *context = static_cast<clock_source *>(data);
+
+	if (context->texture) {
+		obs_enter_graphics();
+		gs_texture_destroy(context->texture);
+		obs_leave_graphics();
+	}
+
+	delete context;
 }
 
 void clock_source_get_defaults(obs_data_t *settings)
@@ -165,20 +212,14 @@ std::uint32_t clock_source_get_height(void *data)
 void clock_source_render(void *data, gs_effect_t *)
 {
 	const auto *context = static_cast<clock_source *>(data);
+	if (!context->texture)
+		return;
 
-	gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
-	gs_eparam_t *color_param = gs_effect_get_param_by_name(solid, "color");
-	gs_technique_t *tech = gs_effect_get_technique(solid, "Solid");
-
-	struct vec4 color;
-	vec4_from_rgba(&color, context->color);
-	gs_effect_set_vec4(color_param, &color);
-
-	gs_technique_begin(tech);
-	gs_technique_begin_pass(tech, 0);
-	gs_draw_sprite(nullptr, 0, context->width, context->height);
-	gs_technique_end_pass(tech);
-	gs_technique_end(tech);
+	/* No flip: a bitmap context stores rows top to bottom even though its
+	 * drawing origin is bottom left, so the two cancel out. */
+	gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_PREMULTIPLIED_ALPHA);
+	while (gs_effect_loop(effect, "Draw"))
+		obs_source_draw(context->texture, 0, 0, 0, 0, false);
 }
 
 } // namespace
