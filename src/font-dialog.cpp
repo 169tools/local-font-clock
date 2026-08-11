@@ -137,6 +137,13 @@ bool choose_font(std::string &face, std::string &style)
 
 	QObject::connect(families, &QListWidget::currentTextChanged, styles,
 			 [styles, wanted_style, visible_style_rows](const QString &family) {
+				 /* Carry the weight across families that have it, so browsing
+				  * compares like with like. Read from the live selection rather
+				  * than from what the dialog opened with, or a weight the user
+				  * picked by hand would be thrown away on the next family. */
+				 const QString previous = styles->currentItem() ? styles->currentItem()->text()
+									       : wanted_style;
+
 				 const QStringList available = QFontDatabase::styles(family);
 				 styles->clear();
 				 styles->addItems(available);
@@ -145,7 +152,7 @@ bool choose_font(std::string &face, std::string &style)
 					 styles->setFixedHeight(styles->sizeHintForRow(0) * visible_style_rows +
 								styles->frameWidth() * 2);
 
-				 const QString chosen = pick_default_style(available, wanted_style);
+				 const QString chosen = pick_default_style(available, previous);
 				 const auto matches = styles->findItems(chosen, Qt::MatchExactly);
 				 if (!matches.isEmpty())
 					 styles->setCurrentItem(matches.first());
