@@ -1,5 +1,5 @@
 /*
-Local Font Clock
+Oshi-Font Clock
 Copyright (C) 2026 mizznoff <mizznoff@gmail.com>
 
 This program is free software; you can redistribute it and/or modify
@@ -84,7 +84,7 @@ void clock_source_render(void *data, gs_effect_t *)
 void register_clock_source()
 {
 	obs_source_info info = {
-		.id = "local_font_clock",
+		.id = "oshi_font_clock",
 		.type = OBS_SOURCE_TYPE_INPUT,
 		.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW,
 		.get_name = clock_source_get_name,
