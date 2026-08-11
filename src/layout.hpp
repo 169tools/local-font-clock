@@ -63,10 +63,6 @@ struct clock_measurements {
 	ink_extents time;
 	ink_extents date;
 
-	/// Ink height the point size was solved for. The ratios below scale off this
-	/// rather than off the envelope: a face with one tall outlier of a digit
-	/// should not end up with every gap inflated to match.
-	double scale_height = 0.0;
 
 	/// Ink width of the widest digit repeated across the time format. The rule
 	/// is pinned to this rather than to the current time, so it does not twitch
@@ -114,11 +110,17 @@ inline constexpr double rule_overhang_ratio = 2.0 / reference_ink_height;
 inline constexpr double margin_vertical_ratio = 24.0 / reference_ink_height;
 inline constexpr double margin_horizontal_ratio = 20.0 / reference_ink_height;
 
-inline clock_layout solve_layout(const clock_measurements &measurements)
+/// `scale_height` is the ink height the point size was solved for, and every
+/// distance below is a fraction of it. It is a parameter rather than a field on
+/// clock_measurements so that a back end cannot leave it out: the envelope is
+/// the wrong thing to scale from -- a face with one tall outlier of a digit
+/// would inflate every gap to match -- and a forgotten struct member would pick
+/// that up silently, where a missing argument will not build.
+inline clock_layout solve_layout(const clock_measurements &measurements, double scale_height)
 {
 	clock_layout layout;
 
-	const double scale = measurements.scale_height;
+	const double scale = scale_height;
 	const double rule_thickness = rule_thickness_ratio * scale;
 	const double time_to_rule_gap = time_to_rule_gap_ratio * scale;
 	const double rule_to_date_gap = rule_to_date_gap_ratio * scale;

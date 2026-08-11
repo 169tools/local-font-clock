@@ -259,8 +259,9 @@ rendered_text render_clock(const clock_content &content, const clock_style &styl
 	if (!time_reference)
 		return {};
 
+	const double scale_height = measure(time_reference.get()).height();
+
 	clock_measurements measurements;
-	measurements.scale_height = measure(time_reference.get()).height();
 
 	/* Widths come from the strings being drawn -- those are what gets centred --
 	 * while the vertical figures come from the envelope. The date's slash and
@@ -279,7 +280,7 @@ rendered_text render_clock(const clock_content &content, const clock_style &styl
 	if (measurements.rule_reference_width <= 0.0)
 		return {};
 
-	const clock_layout layout = solve_layout(measurements);
+	const clock_layout layout = solve_layout(measurements, scale_height);
 	if (layout.width == 0 || layout.height == 0)
 		return {};
 
