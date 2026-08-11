@@ -24,6 +24,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 
+#include <algorithm>
 #include <string>
 
 namespace {
@@ -190,6 +191,35 @@ double rule_reference_width(CTFontRef font, CGColorRef color)
 	return line ? measure(line.get()).width : 0.0;
 }
 
+/// Vertical envelope of every digit. Rows are placed against this rather than
+/// against the string on screen, so the layout does not shift as the time
+/// changes, and rather than against a single reference digit, so a face whose
+/// zero is short does not let taller digits push past the margin.
+ink_extents digit_envelope(CTFontRef font, CGColorRef color)
+{
+	ink_extents envelope;
+	bool seen = false;
+
+	for (char digit = '0'; digit <= '9'; ++digit) {
+		CFPtr<CTLineRef> line = make_line(std::string(1, digit), font, color);
+		if (!line)
+			continue;
+
+		const ink_extents extents = measure(line.get());
+		if (!seen) {
+			envelope.ascent = extents.ascent;
+			envelope.descent = extents.descent;
+			seen = true;
+			continue;
+		}
+
+		envelope.ascent = std::max(envelope.ascent, extents.ascent);
+		envelope.descent = std::max(envelope.descent, extents.descent);
+	}
+
+	return envelope;
+}
+
 void draw_line_at(CGContextRef context, CTLineRef line, double origin_x, double baseline_y, double canvas_height)
 {
 	/* Layout works top-down; Core Graphics draws bottom-up. */
@@ -223,22 +253,28 @@ rendered_text render_clock(const clock_content &content, const clock_style &styl
 	if (!time_line || !date_line)
 		return {};
 
-	/* Vertical placement uses the reference strings too, not what is on screen.
-	 * The date's slash rides a little above the digits' top, which is the
-	 * intended trade: the numbers are what the eye tracks, so they are what
-	 * stays put. */
+	/* The size is solved against 0:00, so that is what the spacing ratios scale
+	 * off. Placement is a separate question and uses the digit envelope. */
 	CFPtr<CTLineRef> time_reference = make_line(time_reference_text, time_font.get(), color.get());
-	CFPtr<CTLineRef> date_reference = make_line(date_reference_text, date_font.get(), color.get());
-	if (!time_reference || !date_reference)
+	if (!time_reference)
 		return {};
 
 	clock_measurements measurements;
+	measurements.scale_height = measure(time_reference.get()).height();
+
+	/* Widths come from the strings being drawn -- those are what gets centred --
+	 * while the vertical figures come from the envelope. The date's slash and
+	 * capitals still ride past the digits' top, which is the intended trade: the
+	 * numbers are the visual subject, so they are what stays put. */
 	measurements.time = measure(time_line.get());
 	measurements.date = measure(date_line.get());
-	measurements.time.ascent = measure(time_reference.get()).ascent;
-	measurements.time.descent = measure(time_reference.get()).descent;
-	measurements.date.ascent = measure(date_reference.get()).ascent;
-	measurements.date.descent = measure(date_reference.get()).descent;
+
+	const ink_extents time_envelope = digit_envelope(time_font.get(), color.get());
+	const ink_extents date_envelope = digit_envelope(date_font.get(), color.get());
+	measurements.time.ascent = time_envelope.ascent;
+	measurements.time.descent = time_envelope.descent;
+	measurements.date.ascent = date_envelope.ascent;
+	measurements.date.descent = date_envelope.descent;
 	measurements.rule_reference_width = rule_reference_width(time_font.get(), color.get());
 	if (measurements.rule_reference_width <= 0.0)
 		return {};

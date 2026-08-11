@@ -50,8 +50,23 @@ struct ink_extents {
 };
 
 struct clock_measurements {
+	/// Vertical figures are the envelope of every digit, not the extents of the
+	/// string currently showing. Placing rows by what is on screen would make the
+	/// clock hop as the time changed, and placing them by a single reference
+	/// digit assumes zero is the tallest -- true of text faces, not of display or
+	/// handwritten ones, where the clock then eats into its own margin whenever
+	/// the time contains a taller digit. The envelope is fixed and encloses every
+	/// reading, so the margins hold and nothing moves.
+	///
+	/// Horizontal figures still come from the string being drawn, since that is
+	/// what has to be centred.
 	ink_extents time;
 	ink_extents date;
+
+	/// Ink height the point size was solved for. The ratios below scale off this
+	/// rather than off the envelope: a face with one tall outlier of a digit
+	/// should not end up with every gap inflated to match.
+	double scale_height = 0.0;
 
 	/// Ink width of the widest digit repeated across the time format. The rule
 	/// is pinned to this rather than to the current time, so it does not twitch
@@ -103,7 +118,7 @@ inline clock_layout solve_layout(const clock_measurements &measurements)
 {
 	clock_layout layout;
 
-	const double scale = measurements.time.height();
+	const double scale = measurements.scale_height;
 	const double rule_thickness = rule_thickness_ratio * scale;
 	const double time_to_rule_gap = time_to_rule_gap_ratio * scale;
 	const double rule_to_date_gap = rule_to_date_gap_ratio * scale;
