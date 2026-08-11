@@ -33,13 +33,13 @@
 	},
 	"platformConfig": {
 		"macos": {
-			"bundleId": "com.169tools.local-font-clock"
+			"bundleId": "com.169tools.oshi-font-clock"
 		}
 	},
-	"name": "local-font-clock",
-	"displayName": "Local Font Clock",
+	"name": "oshi-font-clock",
+	"displayName": "Oshi-Font Clock",
 	"version": "0.1.0",
 	"author": "mizznoff",
-	"website": "https://github.com/169tools/local-font-clock",
+	"website": "https://github.com/169tools/oshi-font-clock",
 	"email": "mizznoff@gmail.com"
 }
