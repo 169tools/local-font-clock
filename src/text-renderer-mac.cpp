@@ -28,6 +28,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -265,28 +266,89 @@ double rule_reference_width(const row_style &row)
 	return line ? measure(line.get()).width : 0.0;
 }
 
-/// Draws a line centered on the rule. The measurement is taken here rather than
-/// carried in the frame because it is the one figure that changes with the
-/// time: the string's own ink width and left bearing.
-void draw_centered(CGContextRef context, CTLineRef line, const clock_frame &frame, double baseline_y)
+/// Draws a line centered on the rule, with any colon lifted by `colon_rise`.
+///
+/// The glyphs are placed one at a time rather than handed to CTLineDraw,
+/// because one of them has to move and the rest must not. Core Text has already
+/// laid the whole string out -- kerning, tracking, the lot -- and this only
+/// reads back where it decided each glyph goes and adds to one of them.
+///
+/// Setting the colon as its own line and positioning it by hand would be the
+/// obvious alternative and is worse: it throws away the kerning across both
+/// joins, so the digits would sit differently from the string the layout was
+/// measured against.
+///
+/// The measurement is taken here rather than carried in the frame because it is
+/// the one figure that changes with the time: the string's ink width and left
+/// bearing.
+void draw_centered(CGContextRef context, CTLineRef line, const std::string &text, const clock_frame &frame,
+		   double baseline_y, double colon_rise)
 {
 	const double origin_x = center_origin_x(frame, measure(line));
 
 	/* Layout works top-down; Core Graphics draws bottom-up. */
-	CGContextSetTextPosition(context, origin_x, frame.height - baseline_y);
-	CTLineDraw(line, context);
+	const double origin_y = frame.height - baseline_y;
+
+	CFArrayRef runs = CTLineGetGlyphRuns(line);
+	const CFIndex run_count = runs ? CFArrayGetCount(runs) : 0;
+
+	for (CFIndex r = 0; r < run_count; ++r) {
+		CTRunRef run = static_cast<CTRunRef>(CFArrayGetValueAtIndex(runs, r));
+		const CFIndex count = CTRunGetGlyphCount(run);
+		if (count <= 0)
+			continue;
+
+		/* A run carries the font it was resolved with, which is not always the
+		 * one asked for: Core Text falls back per glyph when a face is missing
+		 * one. Drawing with the run's own font is what keeps that working. */
+		CFDictionaryRef attributes = CTRunGetAttributes(run);
+		CTFontRef run_font =
+			attributes ? static_cast<CTFontRef>(CFDictionaryGetValue(attributes, kCTFontAttributeName))
+				   : nullptr;
+		if (!run_font)
+			continue;
+
+		const CFRange all = CFRangeMake(0, count);
+		std::vector<CGGlyph> glyphs(static_cast<std::size_t>(count));
+		std::vector<CGPoint> positions(static_cast<std::size_t>(count));
+		std::vector<CFIndex> indices(static_cast<std::size_t>(count));
+
+		CTRunGetGlyphs(run, all, glyphs.data());
+		CTRunGetPositions(run, all, positions.data());
+		CTRunGetStringIndices(run, all, indices.data());
+
+		for (CFIndex i = 0; i < count; ++i) {
+			auto &position = positions[static_cast<std::size_t>(i)];
+			position.x += origin_x;
+			position.y += origin_y;
+
+			/* Unlike the shadow, this is not negated. The setting is stated
+			 * the way it looks -- positive is up -- and up is where positive y
+			 * already points in this context.
+			 *
+			 * The index is into the string Core Text was given. Everything the
+			 * clock draws is ASCII, so it also indexes the std::string. */
+			const std::size_t at = static_cast<std::size_t>(indices[static_cast<std::size_t>(i)]);
+			if (at < text.size() && text[at] == ':')
+				position.y += colon_rise;
+		}
+
+		CTFontDrawGlyphs(run_font, glyphs.data(), positions.data(), static_cast<std::size_t>(count), context);
+	}
 }
 
 class mac_clock final : public prepared_clock {
 public:
 	mac_clock(CFPtr<CTFontRef> time_font, CFPtr<CTFontRef> date_font, CFPtr<CGColorRef> color,
-		  double time_tracking_em, double date_tracking_em, bool shadow, const clock_frame &frame)
+		  double time_tracking_em, double date_tracking_em, bool shadow, double colon_offset,
+		  const clock_frame &frame)
 		: time_font_(std::move(time_font)),
 		  date_font_(std::move(date_font)),
 		  color_(std::move(color)),
 		  time_tracking_em_(time_tracking_em),
 		  date_tracking_em_(date_tracking_em),
 		  shadow_(shadow),
+		  colon_offset_(colon_offset),
 		  frame_(frame)
 	{
 	}
@@ -309,6 +371,7 @@ private:
 	double time_tracking_em_ = 0.0;
 	double date_tracking_em_ = 0.0;
 	bool shadow_ = true;
+	double colon_offset_ = 0.0;
 	clock_frame frame_;
 };
 
@@ -366,11 +429,20 @@ rendered_text mac_clock::render(const clock_content &content) const
 					    frame_.shadow_blur, shadow_color.get());
 	}
 
+	/* CTFontDrawGlyphs takes its colour from the context, where CTLineDraw took
+	 * it from the string's attributes. Same colour either way. */
+	CGContextSetFillColorWithColor(context.get(), color_.get());
+	CGContextSetTextMatrix(context.get(), CGAffineTransformIdentity);
+
 	/* The date's slash and capitals ride past the digits' top, which is the
 	 * intended trade: the numbers are the visual subject, so they are what the
-	 * margins are measured against. */
-	draw_centered(context.get(), time_line.get(), frame_, frame_.time_baseline_y);
-	draw_centered(context.get(), date_line.get(), frame_, frame_.date_baseline_y);
+	 * margins are measured against.
+	 *
+	 * The date goes through the same path even though it holds no colon: one
+	 * way of drawing a row is easier to be sure of than two. */
+	const double colon_rise = colon_offset_ * frame_.scale;
+	draw_centered(context.get(), time_line.get(), content.time, frame_, frame_.time_baseline_y, colon_rise);
+	draw_centered(context.get(), date_line.get(), content.date, frame_, frame_.date_baseline_y, colon_rise);
 
 	/* The rule takes the text color, so it disappears against a background for
 	 * the same reasons the text does, and stays legible for the same fixes --
@@ -418,5 +490,48 @@ std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style)
 		return nullptr;
 
 	return std::make_unique<mac_clock>(std::move(time_font), std::move(date_font), std::move(color),
-					   style.time_tracking_em, style.date_tracking_em, style.shadow, frame);
+					   style.time_tracking_em, style.date_tracking_em, style.shadow,
+					   style.colon_offset, frame);
+}
+
+double suggest_colon_offset(const clock_style &style)
+{
+	if (style.time_ink_height <= 0.0)
+		return 0.0;
+
+	CFPtr<CGColorRef> color = make_color(style.color);
+	if (!color)
+		return 0.0;
+
+	const double point_size = solve_point_size(style, color.get(), style.time_ink_height, style.time_tracking_em);
+	if (point_size <= 0.0)
+		return 0.0;
+
+	CFPtr<CTFontRef> font = make_font(style, point_size);
+	if (!font)
+		return 0.0;
+
+	const row_style row = {font.get(), color.get(), style.time_tracking_em};
+
+	const ink_span digits = digit_envelope(row);
+	if (digits.height() <= 0.0)
+		return 0.0;
+
+	CFPtr<CTLineRef> colon = make_line(":", row);
+	if (!colon)
+		return 0.0;
+
+	const ink_extents colon_ink = measure(colon.get());
+
+	/* Centres, not heights, so the terms subtract. A height is how far ink
+	 * spreads and adds up; this is the midpoint of a span measured from the
+	 * baseline, and the two figures point in opposite directions from it.
+	 *
+	 * A colon usually sits with its lower dot on the baseline and its upper one
+	 * around the x-height, which puts its centre well below the digits'. That is
+	 * why the answer comes out positive for most faces. */
+	const double digit_center = (digits.ascent - digits.descent) / 2.0;
+	const double colon_center = (colon_ink.ascent - colon_ink.descent) / 2.0;
+
+	return (digit_center - colon_center) / digits.height() - colon_optical_correction;
 }
