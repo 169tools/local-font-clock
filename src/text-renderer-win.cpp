@@ -30,6 +30,15 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "com-ptr.hpp"
 #include "layout.hpp"
 
+/* windows.h defines min and max as macros, which turns every std::min and
+ * std::max below into a syntax error -- and into one that blames the standard
+ * library rather than the header that broke it (error C2589, "illegal token on
+ * right side of '::'"). NOMINMAX is the documented way out; WIN32_LEAN_AND_MEAN
+ * drops the rest of the headers this file has no use for. Both have to come
+ * before the include to have any effect. */
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+
 #include <windows.h>
 
 #include <dwrite_1.h>
