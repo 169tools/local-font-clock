@@ -54,8 +54,18 @@ constexpr double date_height_ratio = 18.0 / 44.0;
 constexpr double colon_offset_min_percent = -5.0;
 constexpr double colon_offset_max_percent = 25.0;
 
-/* Tightening only; opening the tracking up is not useful here. */
+/* Mostly tightening, but not only: the spec allows the negative side alone
+ * (SPEC 6.2), on the reasoning that opening a clock up is not something anyone
+ * wants. That holds until the face is not one of the ones it was written
+ * against -- a condensed or a heavy display cut can set its digits close enough
+ * that they read as one number, and there is nothing else in the plugin that
+ * separates them.
+ *
+ * The range is deliberately lopsided. Tightening is the adjustment people
+ * reach for and wants room; widening is a nudge, and a clock opened up much
+ * further stops reading as a clock. */
 constexpr double tracking_min_em = -0.1;
+constexpr double tracking_max_em = 0.02;
 
 /* The date follows the time's tracking at four fifths of it rather than being
  * set on its own. Both rows want to tighten together, but the date is set much
@@ -400,7 +410,8 @@ obs_properties_t *clock_source_get_properties(void *data)
 	obs_properties_add_bool(props, "shadow", obs_module_text("Shadow"));
 	obs_properties_add_float_slider(props, "colon_offset", obs_module_text("ColonOffset"), colon_offset_min_percent,
 					colon_offset_max_percent, 0.1);
-	obs_properties_add_float_slider(props, "tracking", obs_module_text("Tracking"), tracking_min_em, 0.0, 0.005);
+	obs_properties_add_float_slider(props, "tracking", obs_module_text("Tracking"), tracking_min_em,
+					tracking_max_em, 0.005);
 
 	return props;
 }
