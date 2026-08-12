@@ -84,12 +84,26 @@ QPixmap render_preview(const QString &family, const QString &style)
 	return QPixmap::fromImage(image.copy(content));
 }
 
+/// Bold outranks the weight carried over from the last family, rather than the
+/// other way round.
+///
+/// Preferring the carried weight sounds like the more attentive behaviour, but
+/// it cannot recover: plenty of families have no bold face at all, and browsing
+/// through one of those drops the selection to whatever the family lists first
+/// -- usually Regular. That Regular is then what the next family inherits, and
+/// since almost every family has a Regular, it is what every family after it
+/// gets too. One family without a bold face and the whole rest of the list
+/// quietly stops being bold.
+///
+/// Asking for bold first means a family that has one always shows one. The
+/// carried weight still decides among the families that do not, which is where
+/// carrying it was worth anything to begin with.
 QString pick_default_style(const QStringList &styles, const QString &wanted)
 {
-	if (styles.contains(wanted))
-		return wanted;
 	if (styles.contains(preferred_style))
 		return preferred_style;
+	if (styles.contains(wanted))
+		return wanted;
 	return styles.isEmpty() ? QString() : styles.first();
 }
 
@@ -145,10 +159,11 @@ bool choose_font(std::string &face, std::string &style)
 
 	QObject::connect(families, &QListWidget::currentTextChanged, styles,
 			 [styles, wanted_style, visible_style_rows](const QString &family) {
-				 /* Carry the weight across families that have it, so browsing
-				  * compares like with like. Read from the live selection rather
-				  * than from what the dialog opened with, or a weight the user
-				  * picked by hand would be thrown away on the next family. */
+				 /* Carried across families that have no bold face, so browsing
+				  * among those compares like with like. Read from the live
+				  * selection rather than from what the dialog opened with, or a
+				  * weight picked by hand would be thrown away on the next
+				  * family. */
 				 const QString previous = styles->currentItem() ? styles->currentItem()->text()
 									       : wanted_style;
 
