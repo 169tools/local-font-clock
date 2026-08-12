@@ -100,7 +100,7 @@ void redraw_texture(clock_source *context)
 	/* Fixed strings until the clock starts telling the time. */
 	clock_content content;
 	content.time = "12:34";
-	content.date = "7/29 WED";
+	content.date = "5/6 WED";
 
 	const rendered_text bitmap = context->clock ? context->clock->render(content) : rendered_text{};
 	if (!bitmap.valid()) {
