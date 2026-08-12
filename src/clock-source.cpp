@@ -25,8 +25,11 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <plugin-support.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -90,19 +93,64 @@ struct clock_source {
 	 * back end or the style would not resolve. */
 	std::unique_ptr<prepared_clock> clock;
 
+	/* What is currently drawn, and the second it was worked out for. Kept so a
+	 * tick can tell whether anything has actually changed. */
+	clock_content content;
+	std::time_t last_read = 0;
+
 	gs_texture_t *texture = nullptr;
 };
+
+/* Local time throughout: an overlay shows the streamer's own clock, and
+ * localtime already accounts for the timezone and for daylight saving coming
+ * and going, which is not arithmetic worth repeating here. */
+clock_content read_clock(std::time_t now)
+{
+	std::tm local = {};
+#ifdef _WIN32
+	localtime_s(&local, &now);
+#else
+	localtime_r(&now, &local);
+#endif
+
+	static const char *const weekdays[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+
+	/* No leading zeroes, except on the minute, where two digits are how the
+	 * time is written rather than padding. */
+	char time_text[8];
+	char date_text[16];
+	std::snprintf(time_text, sizeof(time_text), "%d:%02d", local.tm_hour, local.tm_min);
+	std::snprintf(date_text, sizeof(date_text), "%d/%d %s", local.tm_mon + 1, local.tm_mday,
+		      weekdays[local.tm_wday]);
+
+	clock_content content;
+	content.time = time_text;
+	content.date = date_text;
+	return content;
+}
+
+/* Brings the stored reading up to date. Returns whether it changed, which is
+ * what decides if anything has to be drawn. */
+bool refresh_content(clock_source *context)
+{
+	const std::time_t now = std::time(nullptr);
+	if (now == context->last_read)
+		return false;
+	context->last_read = now;
+
+	clock_content content = read_clock(now);
+	if (content.time == context->content.time && content.date == context->content.date)
+		return false;
+
+	context->content = std::move(content);
+	return true;
+}
 
 /* Rasterises the current reading and uploads it. Must hold the graphics
  * context. */
 void redraw_texture(clock_source *context)
 {
-	/* Fixed strings until the clock starts telling the time. */
-	clock_content content;
-	content.time = "12:34";
-	content.date = "5/6 WED";
-
-	const rendered_text bitmap = context->clock ? context->clock->render(content) : rendered_text{};
+	const rendered_text bitmap = context->clock ? context->clock->render(context->content) : rendered_text{};
 	if (!bitmap.valid()) {
 		if (context->texture) {
 			gs_texture_destroy(context->texture);
@@ -152,6 +200,24 @@ const char *clock_source_get_name(void *)
 	return obs_module_text("ClockSource");
 }
 
+/* Called once a frame, for every source, whether or not it is on screen -- so a
+ * clock that has been hidden for an hour is already correct when it comes back.
+ * Nearly every call returns without doing anything: the reading is only worked
+ * out when the second has moved on, and only drawn when the minute has. */
+void clock_source_video_tick(void *data, float)
+{
+	auto *context = static_cast<clock_source *>(data);
+
+	if (!refresh_content(context))
+		return;
+
+	/* This runs on the graphics thread, but not inside its context: libobs
+	 * closes gs_enter_context() before it ticks sources. */
+	obs_enter_graphics();
+	redraw_texture(context);
+	obs_leave_graphics();
+}
+
 void clock_source_update(void *data, obs_data_t *settings)
 {
 	auto *context = static_cast<clock_source *>(data);
@@ -171,6 +237,10 @@ void clock_source_update(void *data, obs_data_t *settings)
 	context->shadow = obs_data_get_bool(settings, "shadow");
 	context->colon_offset_percent = obs_data_get_double(settings, "colon_offset");
 	context->tracking_em = obs_data_get_double(settings, "tracking");
+
+	/* A style change does not wait for the clock to tick, and the very first
+	 * update has nothing to draw until this has run once. */
+	refresh_content(context);
 
 	/* Rebuilt here rather than in video_render so the source reports a real
 	 * size straight away; a zero-sized source can be culled before it ever gets
@@ -297,6 +367,7 @@ void register_clock_source()
 		.get_defaults = clock_source_get_defaults,
 		.get_properties = clock_source_get_properties,
 		.update = clock_source_update,
+		.video_tick = clock_source_video_tick,
 		.video_render = clock_source_render,
 	};
 
