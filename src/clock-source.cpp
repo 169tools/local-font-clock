@@ -44,11 +44,15 @@ constexpr int default_time_ink_height = 44;
  * now that the time row can move. */
 constexpr double date_height_ratio = 18.0 / 44.0;
 
-/* The colon can be nudged -2px..+10px against a 44px time row -- asymmetric,
- * because the correction is almost always upwards. Expressed as a share of the
- * ink height so the range keeps meaning the same thing at any size. */
-constexpr double colon_offset_min_percent = -2.0 / default_time_ink_height * 100.0;
-constexpr double colon_offset_max_percent = 10.0 / default_time_ink_height * 100.0;
+/* A share of the time row's ink height, so the range keeps meaning the same
+ * thing at any size, and asymmetric because the correction is almost always
+ * upwards: a colon usually sits low, with its lower dot on the baseline.
+ *
+ * Across fifteen faces measured here the suggestion ran from +1.7% to +17.5%,
+ * so this leaves room to disagree with it in either direction without letting
+ * the slider reach anywhere silly. */
+constexpr double colon_offset_min_percent = -5.0;
+constexpr double colon_offset_max_percent = 25.0;
 
 /* Tightening only; opening the tracking up is not useful here. */
 constexpr double tracking_min_em = -0.1;
@@ -187,9 +191,7 @@ void redraw_texture(clock_source *context)
 	context->height = bitmap.height;
 }
 
-/* Re-resolves the typeface and geometry, then redraws. Only needed when the
- * style changes -- the time changing does not. Must hold the graphics context. */
-void rebuild_clock(clock_source *context)
+clock_style style_of(const clock_source *context)
 {
 	clock_style style;
 	style.face = context->font_face;
@@ -200,9 +202,28 @@ void rebuild_clock(clock_source *context)
 	style.date_tracking_em = context->tracking_em * date_tracking_ratio;
 	style.color = context->color;
 	style.shadow = context->shadow;
+	style.colon_offset = context->colon_offset_percent / 100.0;
+	return style;
+}
 
-	context->clock = prepare_clock(style);
+/* Re-resolves the typeface and geometry, then redraws. Only needed when the
+ * style changes -- the time changing does not. Must hold the graphics context. */
+void rebuild_clock(clock_source *context)
+{
+	context->clock = prepare_clock(style_of(context));
 	redraw_texture(context);
+}
+
+/* Where this face wants its colon, as the slider reads it.
+ *
+ * Only the face and style matter, so the rest of the settings can be whatever
+ * the context is currently holding. */
+double suggested_colon_offset_percent(const std::string &face, const std::string &style)
+{
+	clock_style spec;
+	spec.face = face;
+	spec.style = style;
+	return suggest_colon_offset(spec) * 100.0;
 }
 
 const char *clock_source_get_name(void *)
@@ -245,6 +266,19 @@ void clock_source_update(void *data, obs_data_t *settings)
 	context->date_ink_height = context->time_ink_height * date_height_ratio;
 	context->color = static_cast<std::uint32_t>(obs_data_get_int(settings, "color"));
 	context->shadow = obs_data_get_bool(settings, "shadow");
+
+	/* The colon starts where the face wants it rather than at zero, which is why
+	 * there is no button to put it there: the useful value is already in the
+	 * slider, and what is left for the user to do is disagree with it.
+	 *
+	 * It cannot be a plain default, since it is a different number for every
+	 * face. So it is written in as a real value the first time, and left alone
+	 * afterwards -- obs_data_has_user_value is what separates "never set" from
+	 * "set, and happens to equal the suggestion". */
+	if (!obs_data_has_user_value(settings, "colon_offset"))
+		obs_data_set_double(settings, "colon_offset",
+				    suggested_colon_offset_percent(context->font_face, context->font_style));
+
 	context->colon_offset_percent = obs_data_get_double(settings, "colon_offset");
 	context->tracking_em = obs_data_get_double(settings, "tracking");
 
@@ -322,6 +356,12 @@ bool clock_source_choose_font(obs_properties_t *, obs_property_t *, void *data)
 	obs_data_t *settings = obs_source_get_settings(context->source);
 	obs_data_set_string(settings, "font_face", face.c_str());
 	obs_data_set_string(settings, "font_style", style.c_str());
+
+	/* Re-suggested rather than carried over: the old figure was measured against
+	 * a different face and means nothing here. Anything the user had dialled in
+	 * is lost, which is the point -- they were correcting the previous face. */
+	obs_data_set_double(settings, "colon_offset", suggested_colon_offset_percent(face, style));
+
 	obs_source_update(context->source, settings);
 	obs_data_release(settings);
 

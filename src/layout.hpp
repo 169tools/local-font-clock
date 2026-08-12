@@ -106,6 +106,11 @@ struct clock_frame {
 	/// back end drawing bottom-up has to negate the vertical one.
 	double shadow_offset = 0.0;
 	double shadow_blur = 0.0;
+
+	/// The time row's ink height: what every ratio here was a share of. Carried
+	/// so a back end can scale a setting of its own -- the colon offset is held
+	/// the same way -- without going back to the measurements for it.
+	double scale = 0.0;
 };
 
 /// Every distance below is a share of the time row's ink height, not a pixel
@@ -151,6 +156,16 @@ inline constexpr double shadow_blur_ratio = 5.0 / reference_ink_height;
 /// stops doing that.
 inline constexpr double shadow_opacity = 0.5;
 
+/// A geometric centre reads slightly high, so a colon centred on the digits is
+/// dropped by this share of the time row's ink height -- 0.66px against 44px.
+///
+/// Subtracted flat rather than scaled by how far the colon had to move. Looking
+/// high is a property of the size the digits are set at, not of where the colon
+/// started, so a proportional correction would barely touch the faces that
+/// already have their colon near the middle -- which are the ones where a
+/// misplaced correction is most visible.
+inline constexpr double colon_optical_correction = 0.015;
+
 /// Every ratio above is a fraction of the time row's ink height, which is the
 /// height a back end solved its point size for. That is the same figure as the
 /// digit envelope it reports, so the scale is read straight off the
@@ -190,6 +205,7 @@ inline clock_frame solve_frame(const clock_measurements &measurements)
 	 * the shadow is drawn into the margin rather than being allowed to widen it. */
 	frame.shadow_offset = shadow_offset_ratio * scale;
 	frame.shadow_blur = shadow_blur_ratio * scale;
+	frame.scale = scale;
 
 	return frame;
 }
