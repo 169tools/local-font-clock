@@ -36,8 +36,8 @@ struct clock_style {
 	/// independently, so the proportion between the rows survives a size change.
 	double date_ink_height = 18.0;
 
-	/// Letter spacing, as a share of each row's own point size. Negative tightens
-	/// and zero leaves the face alone; opening the spacing up is not offered.
+	/// Letter spacing, as a share of each row's own point size. Negative
+	/// tightens, positive opens up, and zero leaves the face alone.
 	///
 	/// Per row rather than one figure for both, and relative rather than in
 	/// pixels, because the two rows are set at different sizes: the same pixel
