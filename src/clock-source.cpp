@@ -244,8 +244,14 @@ void clock_source_update(void *data, obs_data_t *settings)
 
 	/* Rebuilt here rather than in video_render so the source reports a real
 	 * size straight away; a zero-sized source can be culled before it ever gets
-	 * a chance to draw. update() runs off the graphics thread, hence the
-	 * explicit context. */
+	 * a chance to draw.
+	 *
+	 * libobs defers update() for video sources: obs_source_update() only bumps a
+	 * counter, and obs_source_video_tick() makes the call, just before it calls
+	 * video_tick. So the two run on the same thread, one after the other, and
+	 * neither holds the graphics context -- which is why both enter it. The one
+	 * caller that does not come through libobs is create(), below, which runs on
+	 * whichever thread built the source. */
 	obs_enter_graphics();
 	rebuild_clock(context);
 	obs_leave_graphics();
