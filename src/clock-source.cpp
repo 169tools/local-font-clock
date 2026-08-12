@@ -199,6 +199,7 @@ void rebuild_clock(clock_source *context)
 	style.time_tracking_em = context->tracking_em;
 	style.date_tracking_em = context->tracking_em * date_tracking_ratio;
 	style.color = context->color;
+	style.shadow = context->shadow;
 
 	context->clock = prepare_clock(style);
 	redraw_texture(context);
