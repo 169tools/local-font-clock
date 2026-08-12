@@ -57,6 +57,12 @@ QPixmap render_preview(const QString &family, const QString &style)
 	spec.date_ink_height = preview_ink_height * 18.0 / 44.0;
 	spec.color = 0xffffffff;
 
+	/* The same correction the source will start this face on. Without it the
+	 * preview shows a colon sitting lower than the one the user is about to get,
+	 * which is the one place a preview must not be wrong -- it is the only thing
+	 * here that is being compared face against face. */
+	spec.colon_offset = suggest_colon_offset(spec);
+
 	/* Prepared and discarded per thumbnail: the point of the preview is that the
 	 * face keeps changing, so there is nothing to hold on to between them. */
 	const std::unique_ptr<prepared_clock> clock = prepare_clock(spec);
