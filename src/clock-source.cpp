@@ -353,14 +353,35 @@ bool clock_source_choose_font(obs_properties_t *, obs_property_t *, void *data)
 	if (!choose_font(face, style))
 		return false;
 
+	const bool family_changed = face != context->font_face;
+
 	obs_data_t *settings = obs_source_get_settings(context->source);
 	obs_data_set_string(settings, "font_face", face.c_str());
 	obs_data_set_string(settings, "font_style", style.c_str());
 
 	/* Re-suggested rather than carried over: the old figure was measured against
 	 * a different face and means nothing here. Anything the user had dialled in
-	 * is lost, which is the point -- they were correcting the previous face. */
+	 * is lost, which is the point -- they were correcting the previous face.
+	 *
+	 * Re-measured on a weight change too, not just a family change: a bold cut
+	 * carries heavier dots set differently against taller digits, so the answer
+	 * moves within a family as well as across families. */
 	obs_data_set_double(settings, "colon_offset", suggested_colon_offset_percent(face, style));
+
+	/* Letter spacing goes back to the face's own on a change of family. How much
+	 * a face wants tightening is a property of that face -- how wide it is drawn
+	 * and how much side bearing it carries -- so a figure arrived at by eye on
+	 * one family says nothing about the next, and carrying it over leaves the
+	 * new family looking wrong for a reason that is not on screen.
+	 *
+	 * There is nothing to measure here, unlike the colon. The right amount of
+	 * tightening is a matter of taste, and zero is what the face's designer
+	 * chose, which is the honest place to start from.
+	 *
+	 * Weights within a family keep it: they are drawn as a set and spaced to
+	 * match, so a correction made for one still means something for the next. */
+	if (family_changed)
+		obs_data_set_double(settings, "tracking", 0.0);
 
 	obs_source_update(context->source, settings);
 	obs_data_release(settings);
