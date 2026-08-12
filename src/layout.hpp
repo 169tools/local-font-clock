@@ -139,7 +139,7 @@ inline constexpr double margin_horizontal_ratio = 20.0 / reference_ink_height;
 /// (the offset and blur together reach about 6px against the narrower 20px
 /// side margin), and letting it push the canvas around would mean the clock
 /// changed size when the shadow was switched on.
-inline constexpr double shadow_offset_ratio = 1.0606601717798212 / reference_ink_height;
+inline constexpr double shadow_offset_ratio = 1.0 / reference_ink_height;
 inline constexpr double shadow_blur_ratio = 5.0 / reference_ink_height;
 
 /// Black at half opacity, whatever the text colour is. A shadow is there to
