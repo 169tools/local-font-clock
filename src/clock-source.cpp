@@ -53,6 +53,13 @@ constexpr double colon_offset_max_percent = 10.0 / default_time_ink_height * 100
 /* Tightening only; opening the tracking up is not useful here. */
 constexpr double tracking_min_em = -0.1;
 
+/* The date follows the time's tracking at four fifths of it rather than being
+ * set on its own. Both rows want to tighten together, but the date is set much
+ * smaller, and small text wants more air than large text, not the same amount.
+ * Holding it in em already accounts for the size difference; this is the
+ * further easing on top. */
+constexpr double date_tracking_ratio = 0.8;
+
 /* Ink height of the time row, which everything else is derived from. The lower
  * bound is where the date row stops being legible; the upper is well past any
  * sensible overlay, and scaling in the scene covers the rest. */
@@ -189,6 +196,8 @@ void rebuild_clock(clock_source *context)
 	style.style = context->font_style;
 	style.time_ink_height = context->time_ink_height;
 	style.date_ink_height = context->date_ink_height;
+	style.time_tracking_em = context->tracking_em;
+	style.date_tracking_em = context->tracking_em * date_tracking_ratio;
 	style.color = context->color;
 
 	context->clock = prepare_clock(style);

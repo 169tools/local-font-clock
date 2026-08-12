@@ -72,16 +72,43 @@ CFPtr<CTFontRef> make_font(const clock_style &style, double point_size)
 	return CFPtr<CTFontRef>(CTFontCreateWithFontDescriptor(descriptor.get(), point_size, nullptr));
 }
 
-CFPtr<CTLineRef> make_line(const std::string &text, CTFontRef font, CGColorRef color)
+/// Everything a row is set with. Bundled because tracking has to reach the
+/// measurements as well as the drawing -- the rule follows the time's ink width,
+/// so tightening the digits has to narrow the rule with them -- and every one of
+/// those paths goes through make_line. Passing it alongside the font is what
+/// stops one of them being forgotten.
+///
+/// A view, not an owner: the refs belong to the prepared clock.
+struct row_style {
+	CTFontRef font = nullptr;
+	CGColorRef color = nullptr;
+
+	/// Share of the point size, so the two rows tighten in proportion.
+	double tracking_em = 0.0;
+};
+
+CFPtr<CTLineRef> make_line(const std::string &text, const row_style &row)
 {
 	CFPtr<CFStringRef> string = make_cfstring(text);
 	if (!string)
 		return {};
 
-	const void *keys[] = {kCTFontAttributeName, kCTForegroundColorAttributeName};
-	const void *values[] = {font, color};
+	/* Core Text wants points; the setting is relative to the row's own size.
+	 *
+	 * kCTTrackingAttributeName rather than kCTKernAttributeName: zero is this
+	 * one's "leave it alone", where a zero kern means "no kerning at all" and
+	 * would throw away the pairs the face itself specifies. It also counts the
+	 * space it adds after the last glyph as trailing whitespace, which keeps it
+	 * out of the ink bounds the layout centers on. */
+	const double tracking_points = row.tracking_em * CTFontGetSize(row.font);
+	CFPtr<CFNumberRef> tracking(CFNumberCreate(nullptr, kCFNumberDoubleType, &tracking_points));
+	if (!tracking)
+		return {};
 
-	CFPtr<CFDictionaryRef> attributes(CFDictionaryCreate(nullptr, keys, values, 2, &kCFTypeDictionaryKeyCallBacks,
+	const void *keys[] = {kCTFontAttributeName, kCTForegroundColorAttributeName, kCTTrackingAttributeName};
+	const void *values[] = {row.font, row.color, tracking.get()};
+
+	CFPtr<CFDictionaryRef> attributes(CFDictionaryCreate(nullptr, keys, values, 3, &kCFTypeDictionaryKeyCallBacks,
 							     &kCFTypeDictionaryValueCallBacks));
 	if (!attributes)
 		return {};
@@ -138,13 +165,13 @@ CFPtr<CGColorRef> make_color(std::uint32_t rgba)
 ///
 /// Digits only: the date's slash and its weekday capitals rise past them in
 /// most faces, and including those would shrink the numbers to compensate.
-ink_span digit_envelope(CTFontRef font, CGColorRef color)
+ink_span digit_envelope(const row_style &row)
 {
 	ink_span envelope;
 	bool seen = false;
 
 	for (char digit = '0'; digit <= '9'; ++digit) {
-		CFPtr<CTLineRef> line = make_line(std::string(1, digit), font, color);
+		CFPtr<CTLineRef> line = make_line(std::string(1, digit), row);
 		if (!line)
 			continue;
 
@@ -163,19 +190,25 @@ ink_span digit_envelope(CTFontRef font, CGColorRef color)
 	return envelope;
 }
 
-double envelope_height(const clock_style &style, CGColorRef color, double point_size)
+double envelope_height(const clock_style &style, CGColorRef color, double point_size, double tracking_em)
 {
 	CFPtr<CTFontRef> font = make_font(style, point_size);
 	if (!font)
 		return 0.0;
 
-	return digit_envelope(font.get(), color).height();
+	return digit_envelope({font.get(), color, tracking_em}).height();
 }
 
 /// Finds the point size whose digit envelope is `target_height` tall.
-double solve_point_size(const clock_style &style, CGColorRef color, double target_height)
+///
+/// Tracking is carried through for consistency but cannot move the answer: the
+/// envelope is measured a digit at a time, and the space tracking adds falls
+/// after the glyph, outside its ink. That is the behaviour to want -- the clock
+/// keeps the height it was set to while the spacing is adjusted, instead of
+/// growing and shrinking under the slider.
+double solve_point_size(const clock_style &style, CGColorRef color, double target_height, double tracking_em)
 {
-	const double reference_height = envelope_height(style, color, reference_point_size);
+	const double reference_height = envelope_height(style, color, reference_point_size, tracking_em);
 	if (reference_height <= 0.0)
 		return 0.0;
 
@@ -183,7 +216,7 @@ double solve_point_size(const clock_style &style, CGColorRef color, double targe
 
 	/* Hinting makes the relationship slightly non-linear, so measure once more
 	 * at the estimate and correct by the same ratio. */
-	const double actual_height = envelope_height(style, color, estimate);
+	const double actual_height = envelope_height(style, color, estimate, tracking_em);
 	if (actual_height <= 0.0)
 		return estimate;
 
@@ -194,14 +227,18 @@ double solve_point_size(const clock_style &style, CGColorRef color, double targe
 /// format. Measured per digit rather than assuming zero is widest, because it
 /// is not in every face -- and if it is not, 12:34 would overhang a rule sized
 /// from 00:00.
-double rule_reference_width(CTFontRef font, CGColorRef color)
+///
+/// Measured with the row's tracking applied, so tightening the digits pulls the
+/// rule in with them rather than leaving it hanging past the ink it is meant to
+/// be the width of.
+double rule_reference_width(const row_style &row)
 {
 	std::string widest = "0";
 	double widest_width = 0.0;
 
 	for (char digit = '0'; digit <= '9'; ++digit) {
 		const std::string candidate(1, digit);
-		CFPtr<CTLineRef> line = make_line(candidate, font, color);
+		CFPtr<CTLineRef> line = make_line(candidate, row);
 		if (!line)
 			continue;
 
@@ -213,7 +250,7 @@ double rule_reference_width(CTFontRef font, CGColorRef color)
 	}
 
 	const std::string reference = widest + widest + ":" + widest + widest;
-	CFPtr<CTLineRef> line = make_line(reference, font, color);
+	CFPtr<CTLineRef> line = make_line(reference, row);
 	return line ? measure(line.get()).width : 0.0;
 }
 
@@ -232,10 +269,12 @@ void draw_centered(CGContextRef context, CTLineRef line, const clock_frame &fram
 class mac_clock final : public prepared_clock {
 public:
 	mac_clock(CFPtr<CTFontRef> time_font, CFPtr<CTFontRef> date_font, CFPtr<CGColorRef> color,
-		  const clock_frame &frame)
+		  double time_tracking_em, double date_tracking_em, const clock_frame &frame)
 		: time_font_(std::move(time_font)),
 		  date_font_(std::move(date_font)),
 		  color_(std::move(color)),
+		  time_tracking_em_(time_tracking_em),
+		  date_tracking_em_(date_tracking_em),
 		  frame_(frame)
 	{
 	}
@@ -246,9 +285,17 @@ public:
 	rendered_text render(const clock_content &content) const override;
 
 private:
+	/// The same values the frame was solved against. Rebuilt per row rather than
+	/// stored as row_style, since that holds borrowed refs and these outlive any
+	/// one call.
+	row_style time_row() const noexcept { return {time_font_.get(), color_.get(), time_tracking_em_}; }
+	row_style date_row() const noexcept { return {date_font_.get(), color_.get(), date_tracking_em_}; }
+
 	CFPtr<CTFontRef> time_font_;
 	CFPtr<CTFontRef> date_font_;
 	CFPtr<CGColorRef> color_;
+	double time_tracking_em_ = 0.0;
+	double date_tracking_em_ = 0.0;
 	clock_frame frame_;
 };
 
@@ -257,8 +304,8 @@ rendered_text mac_clock::render(const clock_content &content) const
 	if (content.time.empty())
 		return {};
 
-	CFPtr<CTLineRef> time_line = make_line(content.time, time_font_.get(), color_.get());
-	CFPtr<CTLineRef> date_line = make_line(content.date, date_font_.get(), color_.get());
+	CFPtr<CTLineRef> time_line = make_line(content.time, time_row());
+	CFPtr<CTLineRef> date_line = make_line(content.date, date_row());
 	if (!time_line || !date_line)
 		return {};
 
@@ -316,8 +363,8 @@ std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style)
 	if (!color)
 		return nullptr;
 
-	const double time_size = solve_point_size(style, color.get(), style.time_ink_height);
-	const double date_size = solve_point_size(style, color.get(), style.date_ink_height);
+	const double time_size = solve_point_size(style, color.get(), style.time_ink_height, style.time_tracking_em);
+	const double date_size = solve_point_size(style, color.get(), style.date_ink_height, style.date_tracking_em);
 	if (time_size <= 0.0 || date_size <= 0.0)
 		return nullptr;
 
@@ -326,10 +373,13 @@ std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style)
 	if (!time_font || !date_font)
 		return nullptr;
 
+	const row_style time_row = {time_font.get(), color.get(), style.time_tracking_em};
+	const row_style date_row = {date_font.get(), color.get(), style.date_tracking_em};
+
 	clock_measurements measurements;
-	measurements.time = digit_envelope(time_font.get(), color.get());
-	measurements.date = digit_envelope(date_font.get(), color.get());
-	measurements.rule_reference_width = rule_reference_width(time_font.get(), color.get());
+	measurements.time = digit_envelope(time_row);
+	measurements.date = digit_envelope(date_row);
+	measurements.rule_reference_width = rule_reference_width(time_row);
 	if (measurements.rule_reference_width <= 0.0)
 		return nullptr;
 
@@ -337,5 +387,6 @@ std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style)
 	if (frame.width == 0 || frame.height == 0)
 		return nullptr;
 
-	return std::make_unique<mac_clock>(std::move(time_font), std::move(date_font), std::move(color), frame);
+	return std::make_unique<mac_clock>(std::move(time_font), std::move(date_font), std::move(color),
+					   style.time_tracking_em, style.date_tracking_em, frame);
 }

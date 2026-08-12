@@ -36,6 +36,16 @@ struct clock_style {
 	/// independently, so the proportion between the rows survives a size change.
 	double date_ink_height = 18.0;
 
+	/// Letter spacing, as a share of each row's own point size. Negative tightens
+	/// and zero leaves the face alone; opening the spacing up is not offered.
+	///
+	/// Per row rather than one figure for both, and relative rather than in
+	/// pixels, because the two rows are set at different sizes: the same pixel
+	/// amount would bite twice as hard into the date, and tight small text is
+	/// the wrong way round -- small text wants more air, not less.
+	double time_tracking_em = 0.0;
+	double date_tracking_em = 0.0;
+
 	/// OBS byte order: red in the low byte, as vec4_from_rgba expects. The rule
 	/// takes the same color as the text, since it reads as part of the mark.
 	std::uint32_t color = 0xffffffff;
