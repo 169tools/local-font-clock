@@ -27,3 +27,10 @@ std::unique_ptr<prepared_clock> prepare_clock(const clock_style &)
 {
 	return nullptr;
 }
+
+/* Zero leaves the colon where the face put it, which is the right answer to
+ * give when the face cannot be measured at all. */
+double suggest_colon_offset(const clock_style &)
+{
+	return 0.0;
+}

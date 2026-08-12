@@ -54,6 +54,14 @@ struct clock_style {
 	/// the clock legible over whatever is behind it -- has one right answer at a
 	/// given size, and the size is already a setting.
 	bool shadow = true;
+
+	/// How far to lift the colon off the baseline the digits sit on, as a share
+	/// of the time row's ink height, positive upwards. Zero leaves it where the
+	/// face put it.
+	///
+	/// Purely visual: it moves no other glyph, changes no width, and does not
+	/// enter the layout.
+	double colon_offset = 0.0;
 };
 
 /// The strings to typeset. Kept apart from the style so the caller can rebuild
@@ -108,3 +116,13 @@ protected:
 /// Returns null if the platform could not prepare the clock: no back end for
 /// this OS, or a style whose face would not resolve.
 std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style);
+
+/// Where a face wants its colon: the offset that centers the colon's ink on the
+/// digits', less the optical correction, in the same terms as
+/// `clock_style::colon_offset`. Zero if it cannot be worked out.
+///
+/// Independent of the size, since ink scales with the point size and both terms
+/// are divided by the row's height. Only the face and style matter, which is
+/// why this is worth asking once when the font is chosen rather than carrying
+/// through the settings.
+double suggest_colon_offset(const clock_style &style);
