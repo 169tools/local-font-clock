@@ -101,6 +101,11 @@ struct clock_frame {
 	/// element, and letting it absorb the time's changing width is the reason
 	/// dropping the leading zero does not shift the layout.
 	double center_x = 0.0;
+
+	/// Cast down and to the right by this much on each axis, then blurred. A
+	/// back end drawing bottom-up has to negate the vertical one.
+	double shadow_offset = 0.0;
+	double shadow_blur = 0.0;
 };
 
 /// Every distance below is a share of the time row's ink height, not a pixel
@@ -125,6 +130,22 @@ inline constexpr double rule_overhang_ratio = 2.0 / reference_ink_height;
 /// side margins read as larger than they are.
 inline constexpr double margin_vertical_ratio = 24.0 / reference_ink_height;
 inline constexpr double margin_horizontal_ratio = 20.0 / reference_ink_height;
+
+/// The drop shadow: 1.5px cast at 315 degrees -- down and to the right -- over
+/// a 5px blur, against the same 44px row as the distances above. 315 degrees
+/// splits the distance evenly between the axes, so each gets 1.5 / sqrt(2).
+///
+/// It does not enter the layout. The margins are wide enough to contain it
+/// (the offset and blur together reach about 6px against the narrower 20px
+/// side margin), and letting it push the canvas around would mean the clock
+/// changed size when the shadow was switched on.
+inline constexpr double shadow_offset_ratio = 1.0606601717798212 / reference_ink_height;
+inline constexpr double shadow_blur_ratio = 5.0 / reference_ink_height;
+
+/// Black at half opacity, whatever the text colour is. A shadow is there to
+/// separate the clock from what is behind it, and one tinted to match the text
+/// stops doing that.
+inline constexpr double shadow_opacity = 0.5;
 
 /// Every ratio above is a fraction of the time row's ink height, which is the
 /// height a back end solved its point size for. That is the same figure as the
@@ -160,6 +181,11 @@ inline clock_frame solve_frame(const clock_measurements &measurements)
 	frame.height = static_cast<std::uint32_t>(std::ceil(canvas_height));
 
 	frame.center_x = frame.rule_x + frame.rule_width / 2.0;
+
+	/* Scaled like everything else, and deliberately after the canvas is settled:
+	 * the shadow is drawn into the margin rather than being allowed to widen it. */
+	frame.shadow_offset = shadow_offset_ratio * scale;
+	frame.shadow_blur = shadow_blur_ratio * scale;
 
 	return frame;
 }

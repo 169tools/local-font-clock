@@ -49,6 +49,11 @@ struct clock_style {
 	/// OBS byte order: red in the low byte, as vec4_from_rgba expects. The rule
 	/// takes the same color as the text, since it reads as part of the mark.
 	std::uint32_t color = 0xffffffff;
+
+	/// On or off; the shadow itself is not adjustable. What it is for -- holding
+	/// the clock legible over whatever is behind it -- has one right answer at a
+	/// given size, and the size is already a setting.
+	bool shadow = true;
 };
 
 /// The strings to typeset. Kept apart from the style so the caller can rebuild

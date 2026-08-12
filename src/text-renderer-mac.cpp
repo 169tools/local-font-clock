@@ -136,6 +136,17 @@ ink_extents measure(CTLineRef line)
 	return extents;
 }
 
+/// Black at the fixed opacity, independent of the text colour.
+CFPtr<CGColorRef> make_shadow_color()
+{
+	CFPtr<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+	if (!space)
+		return {};
+
+	const CGFloat components[] = {0.0, 0.0, 0.0, static_cast<CGFloat>(shadow_opacity)};
+	return CFPtr<CGColorRef>(CGColorCreate(space.get(), components));
+}
+
 CFPtr<CGColorRef> make_color(std::uint32_t rgba)
 {
 	CFPtr<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
@@ -269,12 +280,13 @@ void draw_centered(CGContextRef context, CTLineRef line, const clock_frame &fram
 class mac_clock final : public prepared_clock {
 public:
 	mac_clock(CFPtr<CTFontRef> time_font, CFPtr<CTFontRef> date_font, CFPtr<CGColorRef> color,
-		  double time_tracking_em, double date_tracking_em, const clock_frame &frame)
+		  double time_tracking_em, double date_tracking_em, bool shadow, const clock_frame &frame)
 		: time_font_(std::move(time_font)),
 		  date_font_(std::move(date_font)),
 		  color_(std::move(color)),
 		  time_tracking_em_(time_tracking_em),
 		  date_tracking_em_(date_tracking_em),
+		  shadow_(shadow),
 		  frame_(frame)
 	{
 	}
@@ -296,6 +308,7 @@ private:
 	CFPtr<CGColorRef> color_;
 	double time_tracking_em_ = 0.0;
 	double date_tracking_em_ = 0.0;
+	bool shadow_ = true;
 	clock_frame frame_;
 };
 
@@ -337,6 +350,22 @@ rendered_text mac_clock::render(const clock_content &content) const
 	CGContextSetShouldAntialias(context.get(), true);
 	CGContextSetShouldSmoothFonts(context.get(), false);
 
+	/* Set once and left on: every fill that follows casts it, which is what the
+	 * rule needs too.
+	 *
+	 * The vertical offset is negated. The frame gives it as it should look --
+	 * down and to the right -- and this context draws bottom-up, so down is
+	 * negative here, the same inversion the baselines go through below. */
+	CFPtr<CGColorRef> shadow_color;
+	if (shadow_) {
+		shadow_color = make_shadow_color();
+		if (!shadow_color)
+			return {};
+
+		CGContextSetShadowWithColor(context.get(), CGSizeMake(frame_.shadow_offset, -frame_.shadow_offset),
+					    frame_.shadow_blur, shadow_color.get());
+	}
+
 	/* The date's slash and capitals ride past the digits' top, which is the
 	 * intended trade: the numbers are the visual subject, so they are what the
 	 * margins are measured against. */
@@ -344,7 +373,8 @@ rendered_text mac_clock::render(const clock_content &content) const
 	draw_centered(context.get(), date_line.get(), frame_, frame_.date_baseline_y);
 
 	/* The rule takes the text color, so it disappears against a background for
-	 * the same reasons the text does, and stays legible for the same fixes. */
+	 * the same reasons the text does, and stays legible for the same fixes --
+	 * the shadow included. */
 	CGContextSetFillColorWithColor(context.get(), color_.get());
 	CGContextFillRect(context.get(), CGRectMake(frame_.rule_x, frame_.height - frame_.rule_y - frame_.rule_height,
 						    frame_.rule_width, frame_.rule_height));
@@ -388,5 +418,5 @@ std::unique_ptr<prepared_clock> prepare_clock(const clock_style &style)
 		return nullptr;
 
 	return std::make_unique<mac_clock>(std::move(time_font), std::move(date_font), std::move(color),
-					   style.time_tracking_em, style.date_tracking_em, frame);
+					   style.time_tracking_em, style.date_tracking_em, style.shadow, frame);
 }
