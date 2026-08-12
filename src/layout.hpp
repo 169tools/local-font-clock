@@ -131,9 +131,13 @@ inline constexpr double rule_overhang_ratio = 2.0 / reference_ink_height;
 inline constexpr double margin_vertical_ratio = 24.0 / reference_ink_height;
 inline constexpr double margin_horizontal_ratio = 20.0 / reference_ink_height;
 
-/// The drop shadow: 1.5px cast at 315 degrees -- down and to the right -- over
-/// a 5px blur, against the same 44px row as the distances above. 315 degrees
-/// splits the distance evenly between the axes, so each gets 1.5 / sqrt(2).
+/// The drop shadow: 1px down and 1px right, over a 5px blur, against the same
+/// 44px row as the distances above.
+///
+/// The spec states the cast as 1.5px at 315 degrees, which comes to 1.06px on
+/// each axis. Rounded to 1px here: at the default size the difference is a
+/// twentieth of a pixel under a blur eighty times its size, and a round number
+/// is easier to hold on to than 1.5 / sqrt(2).
 ///
 /// It does not enter the layout. The margins are wide enough to contain it
 /// (the offset and blur together reach about 6px against the narrower 20px
